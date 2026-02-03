@@ -1,0 +1,13 @@
+geopandas
+matplotlib
+folium
+pyyaml
+tqdm
+pytest
+contextily
+shapely
+pandas
+pillow
+jupyter
+ipykernel
+notebook

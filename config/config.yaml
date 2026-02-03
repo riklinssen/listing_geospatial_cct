@@ -1,0 +1,36 @@
+# Listing Geospatial CCT — Main Configuration
+# =============================================
+# This file is tracked in git. For local path overrides,
+# create config.local.yaml (gitignored) in this same directory.
+
+paths:
+  # Google Drive shared data directory
+  data_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/Data/0.4_listing_geospatial"
+
+  # Output directory (within Google Drive by default)
+  output_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/Data/0.4_listing_geospatial/02_outputs"
+
+# Map generation settings
+map_settings:
+  # Tablet-optimized resolution (1920x1080)
+  fig_width: 19.2      # inches (at 100 dpi = 1920 px)
+  fig_height: 10.8     # inches (at 100 dpi = 1080 px)
+  dpi: 100
+
+  # Grid cell highlight style
+  highlight_color: "#FF4444"
+  highlight_edge_width: 3
+  label_fontsize: 18
+
+  # Set to false to skip online basemap tiles (for offline use)
+  add_basemap: true
+
+# Column name containing grid cell IDs in the control grid file.
+# Set to null to auto-detect or use row index.
+grid_id_column: null
+
+# File naming
+file_naming:
+  prefix: "grid_cell"
+  suffix: "map"
+  format: "png"
