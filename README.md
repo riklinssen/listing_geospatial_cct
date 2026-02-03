@@ -115,7 +115,6 @@ listing_geospatial_cct/
 ├── notebooks/               # Jupyter notebooks for exploration
 ├── tests/                   # pytest tests
 ├── docs/                    # Documentation
-├── PROJECT_INFO.md          # Project goals and data structure
 ├── requirements.txt         # Python dependencies
 └── .gitignore
 ```
@@ -127,7 +126,7 @@ All geospatial data lives on Google Drive (not in this repo):
 ```
 0.4_listing_geospatial/
 ├── 01_input_data/
-│   ├── boundaries/          # enumeration_areas.geojson, control_grid.geojson
+│   ├── boundaries/          # 
 │   ├── base_layers/         # roads.geojson, buildings.geojson
 │   └── reference_data/
 └── 02_outputs/

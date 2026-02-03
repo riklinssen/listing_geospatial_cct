@@ -2,8 +2,9 @@
 
 Usage:
     python scripts/generate_all_maps.py
-    python scripts/generate_all_maps.py --grid-id-col CELL_ID
     python scripts/generate_all_maps.py --no-basemap
+    python scripts/generate_all_maps.py --status sampled
+    python scripts/generate_all_maps.py --single 42
 """
 
 import argparse
@@ -30,15 +31,15 @@ def parse_args():
         description="Generate high-resolution maps for all control grid cells."
     )
     parser.add_argument(
-        "--grid-id-col",
-        default=None,
-        help="Column name containing grid cell IDs. If not set, uses the first "
-             "column or falls back to row index.",
-    )
-    parser.add_argument(
         "--no-basemap",
         action="store_true",
         help="Disable online basemap tiles (useful offline).",
+    )
+    parser.add_argument(
+        "--status",
+        choices=["sampled", "replacement"],
+        default=None,
+        help="Generate maps only for cells with this sample_status.",
     )
     parser.add_argument(
         "--single",
@@ -46,6 +47,11 @@ def parse_args():
         help="Generate map for a single grid cell ID only.",
     )
     return parser.parse_args()
+
+
+def make_label(grid_id: str, sample_status: str) -> str:
+    """Build a map label from grid ID and sample status."""
+    return f"{grid_id} ({sample_status})"
 
 
 def main():
@@ -59,23 +65,21 @@ def main():
     print(f"Data directory:   {data_dir}")
     print(f"Output directory: {output_dir}")
 
-    # Load grid cells
+    # Load control grid (auto-builds from source if needed)
     grid_cells = load_control_grid(data_dir)
     grid_cells = validate_crs(grid_cells)
 
-    # Determine the grid ID column
-    grid_id_col = args.grid_id_col
-    if grid_id_col is None:
-        # Try common column names
-        for candidate in ["CELL_ID", "cell_id", "grid_id", "GRID_ID", "ID", "id", "NAME", "name"]:
-            if candidate in grid_cells.columns:
-                grid_id_col = candidate
-                break
+    assert "id" in grid_cells.columns, (
+        f"Expected 'id' column in control grid. Found: {list(grid_cells.columns)}"
+    )
+    assert "sample_status" in grid_cells.columns, (
+        f"Expected 'sample_status' column in control grid. Found: {list(grid_cells.columns)}"
+    )
 
-    if grid_id_col and grid_id_col not in grid_cells.columns:
-        print(f"Error: Column '{grid_id_col}' not found in grid data.")
-        print(f"Available columns: {list(grid_cells.columns)}")
-        sys.exit(1)
+    # Optional filter by sample_status
+    if args.status:
+        grid_cells = grid_cells[grid_cells["sample_status"] == args.status].copy()
+        print(f"Filtered to {len(grid_cells)} cells with status '{args.status}'")
 
     # Load optional layers
     roads = load_layer(data_dir, "roads")
@@ -93,39 +97,32 @@ def main():
 
     # Generate maps
     if args.single:
-        # Single grid cell mode
-        if grid_id_col:
-            mask = grid_cells[grid_id_col].astype(str) == str(args.single)
-            cell = grid_cells[mask]
-        else:
-            cell = grid_cells.iloc[[int(args.single)]]
+        mask = grid_cells["id"].astype(str) == str(args.single)
+        cell = grid_cells[mask]
         if len(cell) == 0:
             print(f"Error: Grid cell '{args.single}' not found.")
             sys.exit(1)
-        grid_id = str(args.single)
+        label = make_label(str(args.single), cell.iloc[0]["sample_status"])
         output_path = generator.generate_map(
             grid_cell=cell,
-            grid_id=grid_id,
+            grid_id=label,
             all_grid_cells=grid_cells,
             roads=roads,
             buildings=buildings,
         )
         print(f"Generated: {output_path}")
     else:
-        # Batch mode — all grid cells
         total = len(grid_cells)
         print(f"\nGenerating maps for {total} grid cells...")
 
         for idx, (_, row) in enumerate(tqdm(grid_cells.iterrows(), total=total)):
-            if grid_id_col:
-                grid_id = str(row[grid_id_col])
-            else:
-                grid_id = str(idx + 1).zfill(3)
+            grid_id = str(row["id"])
+            label = make_label(grid_id, row["sample_status"])
 
             cell = grid_cells.iloc[[idx]]
-            output_path = generator.generate_map(
+            generator.generate_map(
                 grid_cell=cell,
-                grid_id=grid_id,
+                grid_id=label,
                 all_grid_cells=grid_cells,
                 roads=roads,
                 buildings=buildings,
