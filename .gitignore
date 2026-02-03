@@ -48,3 +48,6 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+
+#claude code
+PROJECT_INFO.md
