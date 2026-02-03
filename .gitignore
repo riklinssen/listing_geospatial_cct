@@ -1,0 +1,50 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Data and output directories (large files on Google Drive)
+data/
+maps/
+output/
+
+# Local config overrides
+config/*.local.yaml
+*local*
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Credentials and secrets
+*.json
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# pytest / coverage
+.pytest_cache/
+htmlcov/
+.coverage
