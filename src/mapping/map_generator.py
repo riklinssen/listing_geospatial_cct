@@ -18,6 +18,12 @@ try:
 except ImportError:
     HAS_CONTEXTILY = False
 
+try:
+    from matplotlib_scalebar.scalebar import ScaleBar
+    HAS_SCALEBAR = True
+except ImportError:
+    HAS_SCALEBAR = False
+
 
 # Default style constants
 DEFAULT_FIG_WIDTH = 19.2   # inches at 100 dpi -> 1920 px
@@ -41,6 +47,9 @@ class MapGenerator:
         fig_height: float = DEFAULT_FIG_HEIGHT,
         dpi: int = DEFAULT_DPI,
         add_basemap: bool = True,
+        basemap_source=None,
+        zoom: int | str | None = None,
+        add_scalebar: bool = False,
     ):
         """Initialize the map generator.
 
@@ -50,27 +59,38 @@ class MapGenerator:
             fig_height: Figure height in inches.
             dpi: Dots per inch for output PNG.
             add_basemap: Whether to add an online basemap tile layer.
+            basemap_source: Contextily tile provider (e.g. cx.providers.OpenStreetMap.Mapnik).
+                            Defaults to Esri.WorldImagery.
+            zoom: Tile zoom level. Use an int for a fixed level, or "auto" to
+                  let contextily choose. Defaults to contextily's auto behaviour.
+            add_scalebar: Whether to add a distance scale bar to the map.
         """
         self.output_dir = Path(output_dir)
         self.fig_width = fig_width
         self.fig_height = fig_height
         self.dpi = dpi
         self.add_basemap = add_basemap and HAS_CONTEXTILY
+        self.basemap_source = basemap_source
+        self.zoom = zoom
+        self.add_scalebar = add_scalebar and HAS_SCALEBAR
 
     def generate_map(
         self,
         grid_cell: gpd.GeoDataFrame,
         grid_id: str,
+        label: str | None = None,
         all_grid_cells: gpd.GeoDataFrame | None = None,
         roads: gpd.GeoDataFrame | None = None,
         buildings: gpd.GeoDataFrame | None = None,
         buffer_factor: float = 0.3,
+        show: bool = False,
     ) -> Path:
         """Generate a single map PNG for one grid cell.
 
         Args:
             grid_cell: GeoDataFrame containing the single target grid cell.
-            grid_id: Identifier string for this grid cell.
+            grid_id: Numeric/short identifier used for file naming.
+            label: Display label on the map (defaults to grid_id).
             all_grid_cells: All grid cells for context (optional).
             roads: Road network layer (optional).
             buildings: Building footprints layer (optional).
@@ -80,6 +100,8 @@ class MapGenerator:
         Returns:
             Path to the saved PNG file.
         """
+        if label is None:
+            label = grid_id
         fig, ax = plt.subplots(1, 1, figsize=(self.fig_width, self.fig_height))
 
         # Reproject everything to Web Mercator for basemap compatibility
@@ -127,40 +149,28 @@ class MapGenerator:
             linewidth=HIGHLIGHT_EDGE_WIDTH,
         )
 
-        # Add grid ID label at centroid
-        centroid = cell_merc.geometry.centroid.iloc[0]
-        ax.text(
-            centroid.x,
-            centroid.y,
-            grid_id,
-            fontsize=LABEL_FONTSIZE,
-            fontweight="bold",
-            ha="center",
-            va="center",
-            color=HIGHLIGHT_COLOR,
-            bbox=dict(
-                boxstyle="round,pad=0.3",
-                facecolor="white",
-                edgecolor=HIGHLIGHT_COLOR,
-                alpha=0.85,
-            ),
-        )
-
         # Add basemap tiles
         if self.add_basemap:
             try:
-                cx.add_basemap(ax, source=cx.providers.OpenStreetMap.Mapnik)
+                source = self.basemap_source or cx.providers.Esri.WorldImagery
+                basemap_kwargs = {"ax": ax, "source": source}
+                if self.zoom is not None:
+                    basemap_kwargs["zoom"] = self.zoom
+                cx.add_basemap(**basemap_kwargs)
             except Exception as e:
                 print(f"Could not add basemap for {grid_id}: {e}")
 
+        # Scale bar (EPSG:3857 units are metres)
+        if self.add_scalebar:
+            ax.add_artist(ScaleBar(1, location="lower right", box_alpha=0.7))
+
         # Title and legend
-        ax.set_title(f"Grid Cell: {grid_id}", fontsize=TITLE_FONTSIZE, fontweight="bold")
+        ax.set_title(f"Grid Cell: {label}", fontsize=TITLE_FONTSIZE, fontweight="bold")
         ax.set_axis_off()
 
         legend_patch = mpatches.Patch(
             edgecolor=HIGHLIGHT_COLOR, facecolor="none", linewidth=2,
-            label=f"Target: {grid_id}"
-        )
+            label=label        )
         ax.legend(handles=[legend_patch], loc="upper right", fontsize=10)
 
         # Save
@@ -169,6 +179,9 @@ class MapGenerator:
         output_path = cell_dir / f"grid_cell_{grid_id}_map.png"
 
         fig.savefig(output_path, dpi=self.dpi, bbox_inches="tight", pad_inches=0.1)
+
+        if show:
+            plt.show()
         plt.close(fig)
 
         return output_path

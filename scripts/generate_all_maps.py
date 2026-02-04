@@ -23,7 +23,14 @@ from src.data_processing.load_boundaries import (
     load_layer,
     validate_crs,
 )
+import contextily as cx
+
 from src.mapping.map_generator import MapGenerator
+
+BASEMAP_PROVIDERS = {
+    "esri": cx.providers.Esri.WorldImagery,
+    "osm": cx.providers.OpenStreetMap.Mapnik,
+}
 
 
 def parse_args():
@@ -36,10 +43,21 @@ def parse_args():
         help="Disable online basemap tiles (useful offline).",
     )
     parser.add_argument(
+        "--basemap",
+        choices=["esri", "osm"],
+        default="esri",
+        help="Basemap tile provider: 'esri' (Esri WorldImagery) or 'osm' (OpenStreetMap). Default: esri.",
+    )
+    parser.add_argument(
         "--status",
         choices=["sampled", "replacement"],
         default=None,
         help="Generate maps only for cells with this sample_status.",
+    )
+    parser.add_argument(
+        "--scalebar",
+        action="store_true",
+        help="Add a distance scale bar to each map.",
     )
     parser.add_argument(
         "--single",
@@ -87,12 +105,17 @@ def main():
 
     # Initialize generator
     map_settings = config.get("map_settings", {})
+    basemap_source = BASEMAP_PROVIDERS[args.basemap]
+    maps_subfolder = "generated_maps" if args.basemap == "esri" else f"generated_maps_{args.basemap}"
+
     generator = MapGenerator(
-        output_dir=output_dir / "generated_maps",
+        output_dir=output_dir / maps_subfolder,
         fig_width=map_settings.get("fig_width", 19.2),
         fig_height=map_settings.get("fig_height", 10.8),
         dpi=map_settings.get("dpi", 100),
         add_basemap=not args.no_basemap,
+        basemap_source=basemap_source,
+        add_scalebar=args.scalebar,
     )
 
     # Generate maps
@@ -102,10 +125,12 @@ def main():
         if len(cell) == 0:
             print(f"Error: Grid cell '{args.single}' not found.")
             sys.exit(1)
-        label = make_label(str(args.single), cell.iloc[0]["sample_status"])
+        grid_id = str(args.single)
+        label = make_label(grid_id, cell.iloc[0]["sample_status"])
         output_path = generator.generate_map(
             grid_cell=cell,
-            grid_id=label,
+            grid_id=grid_id,
+            label=label,
             all_grid_cells=grid_cells,
             roads=roads,
             buildings=buildings,
@@ -122,7 +147,8 @@ def main():
             cell = grid_cells.iloc[[idx]]
             generator.generate_map(
                 grid_cell=cell,
-                grid_id=label,
+                grid_id=grid_id,
+                label=label,
                 all_grid_cells=grid_cells,
                 roads=roads,
                 buildings=buildings,
