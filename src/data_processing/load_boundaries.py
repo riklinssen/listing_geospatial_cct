@@ -3,12 +3,16 @@
 Reads the 5km study area grid and control area sample flags,
 merges them into a single GeoDataFrame with a sample_status column,
 and provides loaders for optional enhancement layers (roads, buildings).
+
+Also supports generating sub-grid cells (500m or 1km) from point centroids,
+clipped to the parent 5km cell boundaries.
 """
 
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+from shapely.geometry import box as shapely_box
 
 
 def load_study_area_grid(data_dir: Path) -> gpd.GeoDataFrame:
@@ -181,6 +185,136 @@ def load_layer(data_dir: Path, layer_name: str) -> gpd.GeoDataFrame | None:
 
     print(f"Optional layer '{layer_name}' not found in {base_layers_dir} — skipping.")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Sub-grid functions (500m / 1km cells)
+# ---------------------------------------------------------------------------
+
+
+def _point_to_square(point, size: int = 500):
+    """Convert a point to a square polygon centered on it."""
+    half = size / 2
+    return shapely_box(point.x - half, point.y - half, point.x + half, point.y + half)
+
+
+def load_subgrid_points(data_dir: Path) -> gpd.GeoDataFrame:
+    """Load the pre-filtered 500m sub-grid point centroids.
+
+    Expects the file to exist at:
+        <data_dir>/01_input_data/boundaries/subgrid_500m_control_treatment.gpkg
+
+    Args:
+        data_dir: Root data directory.
+
+    Returns:
+        GeoDataFrame with 500m point centroids.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    filepath = data_dir / "01_input_data" / "boundaries" / "subgrid_500m_control_treatment.gpkg"
+    if not filepath.exists():
+        raise FileNotFoundError(
+            f"Sub-grid points file not found: {filepath}\n"
+            "Run the filtering step in notebook 01_explore_data.ipynb first."
+        )
+    gdf = gpd.read_file(filepath)
+    print(f"Loaded {len(gdf)} sub-grid points from {filepath}")
+    return gdf
+
+
+def build_subgrid(
+    subgrid_points: gpd.GeoDataFrame,
+    control_grid: gpd.GeoDataFrame,
+    cell_size: int = 500,
+) -> gpd.GeoDataFrame:
+    """Generate square sub-cells from point centroids, clipped to parent 5km cells.
+
+    Args:
+        subgrid_points: GeoDataFrame of 500m point centroids (must have '5km_id' column).
+        control_grid: GeoDataFrame of 5km cells (must have 'id' column).
+        cell_size: Size of output squares in metres (500 or 1000).
+
+    Returns:
+        GeoDataFrame of clipped square polygons with same attributes as input points.
+    """
+    # Ensure both are in the same projected CRS (UTM 36S)
+    if control_grid.crs.to_epsg() != 32736:
+        control_grid = control_grid.to_crs(epsg=32736)
+
+    # Filter to control cells only (those with valid 5km_id)
+    control_ids = set(control_grid["id"].astype(int))
+    points = subgrid_points[subgrid_points["5km_id"].isin(control_ids)].copy()
+
+    # For 1km cells, subsample to every other row/col to avoid overlap
+    if cell_size == 1000:
+        points = points[
+            (points["row"] % 2 == 0) & (points["col"] % 2 == 0)
+        ].copy()
+
+    # Generate squares from points
+    points["geometry"] = points.geometry.apply(_point_to_square, size=cell_size)
+
+    # Build lookup of parent 5km geometries
+    parent_geoms = control_grid.set_index("id")["geometry"].to_dict()
+
+    # Clip each sub-cell to its parent 5km cell
+    clipped_rows = []
+    for _, row in points.iterrows():
+        parent_id = int(row["5km_id"])
+        if parent_id in parent_geoms:
+            clipped_geom = row.geometry.intersection(parent_geoms[parent_id])
+            if not clipped_geom.is_empty:
+                new_row = row.copy()
+                new_row["geometry"] = clipped_geom
+                clipped_rows.append(new_row)
+
+    result = gpd.GeoDataFrame(clipped_rows, crs=points.crs)
+    print(f"Generated {len(result)} sub-cells at {cell_size}m resolution")
+    return result
+
+
+def save_subgrid(subgrid: gpd.GeoDataFrame, data_dir: Path, cell_size: int) -> Path:
+    """Save a sub-grid to GeoPackage.
+
+    Args:
+        subgrid: GeoDataFrame of sub-grid polygons.
+        data_dir: Root data directory.
+        cell_size: Cell size in metres (for filename).
+
+    Returns:
+        Path to the saved file.
+    """
+    output_path = data_dir / "01_input_data" / "boundaries" / f"subgrid_{cell_size}m_control.gpkg"
+    subgrid.to_file(output_path, driver="GPKG")
+    print(f"Saved sub-grid ({len(subgrid)} cells) to {output_path}")
+    return output_path
+
+
+def load_subgrid(data_dir: Path, cell_size: int = 500) -> gpd.GeoDataFrame:
+    """Load a sub-grid, building it from points if the cached file doesn't exist.
+
+    Args:
+        data_dir: Root data directory.
+        cell_size: Cell size in metres (500 or 1000).
+
+    Returns:
+        GeoDataFrame of sub-grid polygons.
+    """
+    cached_path = data_dir / "01_input_data" / "boundaries" / f"subgrid_{cell_size}m_control.gpkg"
+
+    if cached_path.exists():
+        gdf = gpd.read_file(cached_path)
+        print(f"Loaded {len(gdf)} sub-grid cells ({cell_size}m) from {cached_path}")
+        return gdf
+
+    print(f"Cached {cell_size}m sub-grid not found — building from points...")
+    points = load_subgrid_points(data_dir)
+    control_grid = load_control_grid(data_dir)
+    subgrid = build_subgrid(points, control_grid, cell_size=cell_size)
+    save_subgrid(subgrid, data_dir, cell_size)
+    return subgrid
 
 
 def validate_crs(gdf: gpd.GeoDataFrame, expected_epsg: int = 4326) -> gpd.GeoDataFrame:
