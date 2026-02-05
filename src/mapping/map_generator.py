@@ -80,6 +80,7 @@ class MapGenerator:
         grid_id: str,
         label: str | None = None,
         all_grid_cells: gpd.GeoDataFrame | None = None,
+        subgrid: gpd.GeoDataFrame | None = None,
         roads: gpd.GeoDataFrame | None = None,
         buildings: gpd.GeoDataFrame | None = None,
         buffer_factor: float = 0.3,
@@ -92,6 +93,8 @@ class MapGenerator:
             grid_id: Numeric/short identifier used for file naming.
             label: Display label on the map (defaults to grid_id).
             all_grid_cells: All grid cells for context (optional).
+            subgrid: Sub-grid cells (500m or 1km) to overlay within the target cell.
+                     Should have a '5km_id' column to filter to this cell.
             roads: Road network layer (optional).
             buildings: Building footprints layer (optional).
             buffer_factor: How much to buffer the view around the cell
@@ -148,6 +151,18 @@ class MapGenerator:
             edgecolor=HIGHLIGHT_COLOR,
             linewidth=HIGHLIGHT_EDGE_WIDTH,
         )
+
+        # Overlay sub-grid cells for this 5km cell
+        if subgrid is not None and "5km_id" in subgrid.columns:
+            cell_subgrid = subgrid[subgrid["5km_id"] == int(grid_id)]
+            if len(cell_subgrid) > 0:
+                cell_subgrid.to_crs(target_crs).plot(
+                    ax=ax,
+                    facecolor="none",
+                    edgecolor="#0066CC",
+                    linewidth=0.6,
+                    alpha=0.8,
+                )
 
         # Add basemap tiles
         if self.add_basemap:

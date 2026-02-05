@@ -20,6 +20,7 @@ from tqdm import tqdm
 from src.utils.config_loader import load_config, get_data_dir, get_output_dir
 from src.data_processing.load_boundaries import (
     load_control_grid,
+    load_subgrid,
     load_layer,
     validate_crs,
 )
@@ -64,6 +65,12 @@ def parse_args():
         default=None,
         help="Generate map for a single grid cell ID only.",
     )
+    parser.add_argument(
+        "--subgrid",
+        choices=["none", "500", "1000"],
+        default="none",
+        help="Overlay sub-grid cells: 'none' (default), '500' (500m), or '1000' (1km).",
+    )
     return parser.parse_args()
 
 
@@ -103,10 +110,22 @@ def main():
     roads = load_layer(data_dir, "roads")
     buildings = load_layer(data_dir, "buildings")
 
+    # Load sub-grid if requested
+    subgrid = None
+    if args.subgrid != "none":
+        cell_size = int(args.subgrid)
+        subgrid = load_subgrid(data_dir, cell_size=cell_size)
+        print(f"Loaded {len(subgrid)} sub-grid cells ({cell_size}m)")
+
     # Initialize generator
     map_settings = config.get("map_settings", {})
     basemap_source = BASEMAP_PROVIDERS[args.basemap]
-    maps_subfolder = "generated_maps" if args.basemap == "esri" else f"generated_maps_{args.basemap}"
+    # Build output subfolder name based on options
+    maps_subfolder = "generated_maps"
+    if args.basemap != "esri":
+        maps_subfolder += f"_{args.basemap}"
+    if args.subgrid != "none":
+        maps_subfolder += f"_subgrid{args.subgrid}m"
 
     generator = MapGenerator(
         output_dir=output_dir / maps_subfolder,
@@ -132,6 +151,7 @@ def main():
             grid_id=grid_id,
             label=label,
             all_grid_cells=grid_cells,
+            subgrid=subgrid,
             roads=roads,
             buildings=buildings,
         )
@@ -150,6 +170,7 @@ def main():
                 grid_id=grid_id,
                 label=label,
                 all_grid_cells=grid_cells,
+                subgrid=subgrid,
                 roads=roads,
                 buildings=buildings,
             )
