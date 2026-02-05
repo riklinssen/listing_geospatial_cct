@@ -232,20 +232,39 @@ def build_subgrid(
     """Generate square sub-cells from point centroids, clipped to parent 5km cells.
 
     Args:
-        subgrid_points: GeoDataFrame of 500m point centroids (must have '5km_id' column).
+        subgrid_points: GeoDataFrame of 500m point centroids.
         control_grid: GeoDataFrame of 5km cells (must have 'id' column).
         cell_size: Size of output squares in metres (500 or 1000).
 
     Returns:
-        GeoDataFrame of clipped square polygons with same attributes as input points.
+        GeoDataFrame of clipped square polygons with same attributes as input points,
+        plus '5km_id' column linking to parent cell.
     """
     # Ensure both are in the same projected CRS (UTM 36S)
     if control_grid.crs.to_epsg() != 32736:
         control_grid = control_grid.to_crs(epsg=32736)
 
+    points = subgrid_points.copy()
+    if points.crs != control_grid.crs:
+        points = points.to_crs(control_grid.crs)
+
+    # Spatial join to populate 5km_id if missing or all NaN
+    if "5km_id" not in points.columns or points["5km_id"].isna().all():
+        print("Performing spatial join to assign 500m points to 5km cells...")
+        joined = gpd.sjoin(
+            points,
+            control_grid[["id", "geometry"]],
+            how="inner",
+            predicate="within",
+        )
+        joined["5km_id"] = joined["id_right"]
+        joined = joined.drop(columns=["id_right", "index_right"], errors="ignore")
+        points = joined
+        print(f"  Matched {len(points)} points to control cells")
+
     # Filter to control cells only (those with valid 5km_id)
     control_ids = set(control_grid["id"].astype(int))
-    points = subgrid_points[subgrid_points["5km_id"].isin(control_ids)].copy()
+    points = points[points["5km_id"].isin(control_ids)].copy()
 
     # For 1km cells, subsample to every other row/col to avoid overlap
     if cell_size == 1000:
