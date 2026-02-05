@@ -5,10 +5,10 @@
 
 paths:
   # Google Drive shared data directory
-  data_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/Data/0.4_listing_geospatial"
+  data_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/1_Baseline/0.4_listing_geospatial"
 
   # Output directory (within Google Drive by default)
-  output_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/Data/0.4_listing_geospatial/02_outputs"
+  output_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/1_Baseline/0.4_listing_geospatial/02_outputs"
 
 # Map generation settings
 map_settings:
