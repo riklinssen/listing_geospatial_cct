@@ -31,6 +31,9 @@ from src.mapping.map_generator import MapGenerator
 BASEMAP_PROVIDERS = {
     "esri": cx.providers.Esri.WorldImagery,
     "osm": cx.providers.OpenStreetMap.Mapnik,
+    "google-satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    "google-hybrid": "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+    "google-roads": "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
 }
 
 
@@ -45,9 +48,9 @@ def parse_args():
     )
     parser.add_argument(
         "--basemap",
-        choices=["esri", "osm"],
+        choices=list(BASEMAP_PROVIDERS.keys()),
         default="esri",
-        help="Basemap tile provider: 'esri' (Esri WorldImagery) or 'osm' (OpenStreetMap). Default: esri.",
+        help="Basemap tile provider. Default: esri.",
     )
     parser.add_argument(
         "--status",
