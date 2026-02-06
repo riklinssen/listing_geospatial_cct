@@ -336,6 +336,49 @@ def load_subgrid(data_dir: Path, cell_size: int = 500) -> gpd.GeoDataFrame:
     return subgrid
 
 
+def load_buildings(data_dir: Path) -> gpd.GeoDataFrame | None:
+    """Load Google Open Buildings footprints from parquet.
+
+    Args:
+        data_dir: Root data directory.
+
+    Returns:
+        GeoDataFrame of building footprints, or None if file doesn't exist.
+    """
+    parquet_path = data_dir / "01_input_data" / "base_layers" / "google_buildings.parquet"
+
+    if parquet_path.exists():
+        gdf = gpd.read_parquet(parquet_path)
+        print(f"Loaded {len(gdf)} buildings from {parquet_path}")
+        return gdf
+
+    # Fall back to load_layer for other formats
+    return load_layer(data_dir, "buildings")
+
+
+def load_grid_with_building_counts(data_dir: Path, grid_size: int = 5000) -> gpd.GeoDataFrame | None:
+    """Load a grid file that includes building counts.
+
+    Args:
+        data_dir: Root data directory.
+        grid_size: Grid cell size in metres (5000, 1000, or 500).
+
+    Returns:
+        GeoDataFrame with building_count column, or None if file doesn't exist.
+    """
+    size_label = "5km" if grid_size == 5000 else f"{grid_size}m"
+    counts_path = data_dir / "01_input_data" / "base_layers" / f"grid_{size_label}_building_counts.gpkg"
+
+    if counts_path.exists():
+        gdf = gpd.read_file(counts_path)
+        print(f"Loaded {len(gdf)} grid cells with building counts from {counts_path}")
+        return gdf
+
+    print(f"Grid with building counts not found: {counts_path}")
+    print("Run: python scripts/download_google_buildings.py --grid-size {grid_size}")
+    return None
+
+
 def validate_crs(gdf: gpd.GeoDataFrame, expected_epsg: int = 4326) -> gpd.GeoDataFrame:
     """Reproject GeoDataFrame to expected CRS if needed.
 
