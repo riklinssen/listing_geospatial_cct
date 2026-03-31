@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -94,6 +95,41 @@ def get_ward_name(grid_id, selected_subcells: gpd.GeoDataFrame) -> str:
         if pd.notna(ward) and str(ward).strip():
             return sanitize_name(str(ward).strip())
     return "unknown_ward"
+
+
+def export_subcell_geojson(
+    subcell_row, subcells_crs, output_dir: Path,
+    grid_id: int, subcell_id, role: str,
+) -> Path:
+    """Export a single 500m sub-cell polygon as GeoJSON (WGS84)."""
+    from shapely.geometry import mapping
+
+    geom = subcell_row.geometry
+    # Reproject to WGS84
+    if subcells_crs and subcells_crs.to_epsg() != 4326:
+        gs = gpd.GeoSeries([geom], crs=subcells_crs).to_crs(epsg=4326)
+        geom = gs.iloc[0]
+
+    feature = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {
+                "5km_cell_id": grid_id,
+                "subcell_id": subcell_id,
+                "role": role,
+                "building_count": int(subcell_row.get("building_count", 0)),
+                "latitude": float(subcell_row.get("latitude", 0)),
+                "longitude": float(subcell_row.get("longitude", 0)),
+            },
+            "geometry": mapping(geom),
+        }],
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"subcell_{subcell_id}_{role}.geojson"
+    output_path.write_text(json.dumps(feature, indent=2), encoding="utf-8")
+    return output_path
 
 
 def main():
@@ -195,7 +231,7 @@ def main():
             )
             total_maps += 1
 
-        # Detail maps (in primary/ or reserve/ subfolder)
+        # Detail maps and GeoJSON (in primary/ or reserve/ subfolder)
         if not args.skip_detail:
             cell_selected_sorted = cell_selected.sort_values(
                 "selection_role", ascending=True,
@@ -212,6 +248,14 @@ def main():
                     buildings=buildings,
                 )
                 total_maps += 1
+
+                # Export sub-cell polygon as GeoJSON (WGS84 for SurveyCTO)
+                subcell_id = subcell_row.get("grid_id", f"subcell_{i}")
+                export_subcell_geojson(
+                    subcell_row, subcells_crs=selected.crs,
+                    output_dir=cell_folder / role,
+                    grid_id=int(grid_id), subcell_id=subcell_id, role=role,
+                )
 
     print(f"\nDone! Generated {total_maps} maps across {total_cells} cells")
     print(f"Output: {output_dir}")
