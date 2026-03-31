@@ -105,8 +105,11 @@ def main():
     else:
         grid_500m_counts = gpd.read_file(counts_path)
         print(f"  Loaded {len(grid_500m_counts)} sub-cells with building counts")
-        selected = select_subcells(control_grid, grid_500m_counts)
+        selected, updated_grid = select_subcells(control_grid, grid_500m_counts)
         save_selected_subcells(selected, data_dir)
+        # Save updated 5km grid (with replacement activations)
+        save_control_grid(updated_grid, data_dir)
+        control_grid = updated_grid
 
     # Summary
     print("\n" + "=" * 60)
@@ -121,6 +124,7 @@ def main():
     print(f"  Total 5km controls: {len(control_grid)}")
     print(f"    Sampled:          {(control_grid['sample_status'] == 'sampled').sum()}")
     print(f"    Replacement:      {(control_grid['sample_status'] == 'replacement').sum()}")
+    print(f"    Dropped (sparse): {(control_grid['sample_status'] == 'dropped_sparse').sum()}")
     print(f"  Sub-cells (500m):   {len(subgrid_500m)}")
     print(f"  Sub-cells (1km):    {len(subgrid_1km)}")
     if selected is not None:
