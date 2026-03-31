@@ -349,12 +349,16 @@ def select_subcells(
     n_primary: int = 2,
     n_reserve: int = 2,
     seed: int = 42,
-) -> gpd.GeoDataFrame:
-    """Select primary and reserve 500m sub-cells within each 5km control cell.
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Select 500m sub-cells using PPS sampling, with 5km-level replacement.
 
-    Filters sub-cells to those with at least ``min_buildings``, then randomly
-    assigns ``n_primary`` primary and ``n_reserve`` reserve sub-cells per
-    5km cell.  Cells with fewer eligible sub-cells get as many as available.
+    Steps:
+      1. Filter 500m sub-cells to those with >= min_buildings.
+      2. Identify sparse 5km cells (sampled cells with zero eligible sub-cells).
+      3. Replace sparse sampled cells with viable replacement cells.
+         Activated replacements become "sampled" (they are now primary cells).
+      4. Within each viable 5km cell, draw sub-cells using probability
+         proportional to size (PPS), weighted by building_count.
 
     Args:
         grid_5km: Control grid (must have 'id' and 'sample_status' columns).
@@ -365,38 +369,91 @@ def select_subcells(
         seed: Random seed for reproducibility.
 
     Returns:
-        GeoDataFrame of selected sub-cells with 'selection_role'
-        ("primary" / "reserve"), 'sample_status', and centroid columns.
+        Tuple of (selected_subcells, updated_grid_5km) where:
+        - selected_subcells: GeoDataFrame with 'selection_role', 'sample_status',
+          and centroid columns.
+        - updated_grid_5km: GeoDataFrame with updated sample_status reflecting
+          replacements (activated replacements become "sampled",
+          dropped sparse cells become "dropped_sparse").
     """
     id_col = "5km_id"
     n_required = n_primary + n_reserve
-
-    # Filter eligible sub-cells
-    eligible = grid_500m[grid_500m["building_count"] >= min_buildings].copy()
-    print(f"Eligible sub-cells (>={min_buildings} buildings): {len(eligible)} / {len(grid_500m)}")
-
-    # Flag cells with too few eligible sub-cells
-    eligible_counts = eligible.groupby(id_col).size()
-    problem_ids = [
-        cid for cid in grid_5km["id"].values
-        if eligible_counts.get(cid, 0) < n_required
-    ]
-    if problem_ids:
-        print(f"Warning: {len(problem_ids)} of {len(grid_5km)} cells have "
-              f"fewer than {n_required} eligible sub-cells")
-
-    # Sample within each 5km cell
     rng = np.random.default_rng(seed)
-    results = []
 
-    for cell_id in grid_5km["id"].values:
+    # --- Step 1: Filter eligible 500m sub-cells ---
+    eligible = grid_500m[grid_500m["building_count"] >= min_buildings].copy()
+    eligible_counts = eligible.groupby(id_col).size()
+    print(f"Eligible sub-cells (>={min_buildings} buildings): "
+          f"{len(eligible)} / {len(grid_500m)}")
+
+    # --- Step 2: Identify sparse sampled cells and viable replacements ---
+    grid = grid_5km.copy()
+    grid["n_eligible"] = grid["id"].map(eligible_counts).fillna(0).astype(int)
+
+    sparse_sampled = grid[
+        (grid["sample_status"] == "sampled") & (grid["n_eligible"] == 0)
+    ]
+    viable_replacements = grid[
+        (grid["sample_status"] == "replacement") & (grid["n_eligible"] > 0)
+    ]
+
+    print(f"\nSparse sampled 5km cells (no eligible sub-cells): {len(sparse_sampled)}")
+    print(f"Viable replacement 5km cells: {len(viable_replacements)}")
+
+    # --- Step 3: Activate replacements ---
+    n_to_replace = min(len(sparse_sampled), len(viable_replacements))
+    if n_to_replace > 0:
+        # Pick replacements randomly
+        replacement_ids = rng.choice(
+            viable_replacements["id"].values,
+            size=n_to_replace,
+            replace=False,
+        )
+        # Activate: replacement -> sampled
+        grid.loc[grid["id"].isin(replacement_ids), "sample_status"] = "sampled"
+        # Mark sparse sampled cells as dropped
+        grid.loc[
+            (grid["sample_status"] == "sampled") & (grid["n_eligible"] == 0),
+            "sample_status",
+        ] = "dropped_sparse"
+
+        print(f"\nReplacement summary:")
+        print(f"  Activated {n_to_replace} replacement cells -> now 'sampled'")
+        for rid in replacement_ids:
+            n_elig = eligible_counts.get(rid, 0)
+            print(f"    Cell {int(rid)}: {n_elig} eligible sub-cells")
+        print(f"  Dropped {len(sparse_sampled)} sparse sampled cells:")
+        for _, r in sparse_sampled.iterrows():
+            print(f"    Cell {int(r['id'])}: {int(r['n_eligible'])} eligible sub-cells")
+
+    # Also mark sparse replacement cells (no eligible sub-cells, still "replacement")
+    grid.loc[
+        (grid["sample_status"] == "replacement") & (grid["n_eligible"] == 0),
+        "sample_status",
+    ] = "dropped_sparse"
+
+    # --- Step 4: PPS sampling within each viable cell ---
+    active_cells = grid[grid["sample_status"].isin(["sampled", "replacement"])]
+    print(f"\nActive 5km cells for sub-cell selection: {len(active_cells)}")
+    print(f"  Sampled: {(active_cells['sample_status'] == 'sampled').sum()}")
+    print(f"  Replacement: {(active_cells['sample_status'] == 'replacement').sum()}")
+
+    results = []
+    for cell_id in active_cells["id"].values:
         cell_eligible = eligible[eligible[id_col] == cell_id]
         n_avail = len(cell_eligible)
         if n_avail == 0:
             continue
 
         n_select = min(n_required, n_avail)
-        selected_idx = rng.choice(cell_eligible.index, size=n_select, replace=False)
+
+        # PPS weights: probability proportional to building_count
+        weights = cell_eligible["building_count"].values.astype(float)
+        weights = weights / weights.sum()
+
+        selected_idx = rng.choice(
+            cell_eligible.index, size=n_select, replace=False, p=weights,
+        )
 
         for i, idx in enumerate(selected_idx):
             role = "primary" if i < n_primary else "reserve"
@@ -406,9 +463,9 @@ def select_subcells(
 
     selected = gpd.GeoDataFrame(results, crs=grid_500m.crs)
 
-    # Add sample_status from parent 5km cell
+    # Add sample_status from updated 5km grid
     selected = selected.merge(
-        grid_5km[["id", "sample_status"]].rename(columns={"id": id_col}),
+        grid[["id", "sample_status"]].rename(columns={"id": id_col}),
         on=id_col, how="left",
     )
 
@@ -425,11 +482,20 @@ def select_subcells(
 
     n_primary_actual = (selected["selection_role"] == "primary").sum()
     n_reserve_actual = (selected["selection_role"] == "reserve").sum()
-    print(f"Selected {len(selected)} sub-cells "
-          f"({n_primary_actual} primary, {n_reserve_actual} reserve) "
-          f"from {selected[id_col].nunique()} / {len(grid_5km)} cells")
+    n_cells_covered = selected[id_col].nunique()
 
-    return selected
+    print(f"\n{'='*60}")
+    print(f"SELECTION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Selected {len(selected)} sub-cells "
+          f"({n_primary_actual} primary, {n_reserve_actual} reserve)")
+    print(f"Covering {n_cells_covered} / {len(grid)} 5km cells")
+    print(f"Dropped sparse cells: {(grid['sample_status'] == 'dropped_sparse').sum()}")
+
+    # Drop helper column before returning
+    grid = grid.drop(columns=["n_eligible"])
+
+    return selected, grid
 
 
 def save_selected_subcells(selected: gpd.GeoDataFrame, data_dir: Path) -> Path:
@@ -475,14 +541,16 @@ def load_buildings(data_dir: Path) -> gpd.GeoDataFrame | None:
     Returns:
         GeoDataFrame of building footprints, or None if file doesn't exist.
     """
-    parquet_path = data_dir / "01_input_data" / "base_layers" / "google_buildings.parquet"
+    # Try known filenames in order of preference
+    base_layers = data_dir / "01_input_data" / "base_layers"
+    for name in ["overture_buildings.parquet", "google_buildings.parquet"]:
+        parquet_path = base_layers / name
+        if parquet_path.exists():
+            gdf = gpd.read_parquet(parquet_path)
+            print(f"Loaded {len(gdf)} buildings from {parquet_path}")
+            return gdf
 
-    if parquet_path.exists():
-        gdf = gpd.read_parquet(parquet_path)
-        print(f"Loaded {len(gdf)} buildings from {parquet_path}")
-        return gdf
-
-    # Fall back to load_layer for other formats
+    # Fall back to load_layer for other formats (geojson, shp, gpkg)
     return load_layer(data_dir, "buildings")
 
 
