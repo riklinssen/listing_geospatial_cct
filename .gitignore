@@ -49,5 +49,6 @@ Thumbs.db
 htmlcov/
 .coverage
 
-#claude code
+# Claude Code
+.claude/
 PROJECT_INFO.md
