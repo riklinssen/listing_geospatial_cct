@@ -155,19 +155,23 @@ class MapGenerator:
                 linewidth=SELECTION_LINEWIDTH, alpha=SELECTION_ALPHA,
             )
 
-        # Label each sub-cell with its grid_id and role
+        # Label each sub-cell and mark centroid as starting point
+        import matplotlib.patheffects as pe
         for _, row in selected_subcells.to_crs(TARGET_CRS).iterrows():
             centroid = row.geometry.centroid
+            # Centroid marker (red dot)
+            ax.plot(centroid.x, centroid.y, marker="o", color="red",
+                    markersize=8, markeredgecolor="white", markeredgewidth=2, zorder=5)
+            # Label with role + ID
             role_letter = "P" if row["selection_role"] == "primary" else "R"
             subcell_id = row.get("grid_id", "")
             lbl = f"{role_letter}\n{subcell_id}" if subcell_id else role_letter
             ax.annotate(
-                lbl, xy=(centroid.x, centroid.y),
-                ha="center", va="center", fontsize=12, fontweight="bold",
+                lbl, xy=(centroid.x, centroid.y), xytext=(0, 14),
+                textcoords="offset points",
+                ha="center", va="bottom", fontsize=11, fontweight="bold",
                 color="white",
-                path_effects=[
-                    __import__("matplotlib.patheffects", fromlist=["withStroke"]).withStroke(linewidth=3, foreground="black")
-                ],
+                path_effects=[pe.withStroke(linewidth=3, foreground="black")],
             )
 
         # Basemap: Google Hybrid for village labels
@@ -250,6 +254,19 @@ class MapGenerator:
         # Sub-cell boundary
         edge_color = PRIMARY_EDGE if role == "primary" else RESERVE_EDGE
         subcell_wm.plot(ax=ax, facecolor="none", edgecolor=edge_color, linewidth=3)
+
+        # Centroid marker — starting point for enumerators
+        import matplotlib.patheffects as pe
+        centroid = subcell_wm.geometry.iloc[0].centroid
+        ax.plot(centroid.x, centroid.y, marker="+", color="red",
+                markersize=20, markeredgewidth=3, zorder=5)
+        ax.annotate(
+            "START", xy=(centroid.x, centroid.y), xytext=(0, 16),
+            textcoords="offset points",
+            ha="center", va="bottom", fontsize=12, fontweight="bold",
+            color="red",
+            path_effects=[pe.withStroke(linewidth=3, foreground="white")],
+        )
 
         # Basemap: Google Hybrid (satellite + labels — best rural Africa coverage)
         if self.add_basemap:
