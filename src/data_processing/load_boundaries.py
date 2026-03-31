@@ -11,6 +11,7 @@ clipped to the parent 5km cell boundaries.
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import box as shapely_box
 
@@ -334,6 +335,135 @@ def load_subgrid(data_dir: Path, cell_size: int = 500) -> gpd.GeoDataFrame:
     subgrid = build_subgrid(points, control_grid, cell_size=cell_size)
     save_subgrid(subgrid, data_dir, cell_size)
     return subgrid
+
+
+# ---------------------------------------------------------------------------
+# Sub-cell selection (500m)
+# ---------------------------------------------------------------------------
+
+
+def select_subcells(
+    grid_5km: gpd.GeoDataFrame,
+    grid_500m: gpd.GeoDataFrame,
+    min_buildings: int = 20,
+    n_primary: int = 2,
+    n_reserve: int = 2,
+    seed: int = 42,
+) -> gpd.GeoDataFrame:
+    """Select primary and reserve 500m sub-cells within each 5km control cell.
+
+    Filters sub-cells to those with at least ``min_buildings``, then randomly
+    assigns ``n_primary`` primary and ``n_reserve`` reserve sub-cells per
+    5km cell.  Cells with fewer eligible sub-cells get as many as available.
+
+    Args:
+        grid_5km: Control grid (must have 'id' and 'sample_status' columns).
+        grid_500m: 500m sub-grid with 'building_count' and '5km_id' columns.
+        min_buildings: Minimum building count for a sub-cell to be eligible.
+        n_primary: Number of primary sub-cells per 5km cell.
+        n_reserve: Number of reserve sub-cells per 5km cell.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        GeoDataFrame of selected sub-cells with 'selection_role'
+        ("primary" / "reserve"), 'sample_status', and centroid columns.
+    """
+    id_col = "5km_id"
+    n_required = n_primary + n_reserve
+
+    # Filter eligible sub-cells
+    eligible = grid_500m[grid_500m["building_count"] >= min_buildings].copy()
+    print(f"Eligible sub-cells (>={min_buildings} buildings): {len(eligible)} / {len(grid_500m)}")
+
+    # Flag cells with too few eligible sub-cells
+    eligible_counts = eligible.groupby(id_col).size()
+    problem_ids = [
+        cid for cid in grid_5km["id"].values
+        if eligible_counts.get(cid, 0) < n_required
+    ]
+    if problem_ids:
+        print(f"Warning: {len(problem_ids)} of {len(grid_5km)} cells have "
+              f"fewer than {n_required} eligible sub-cells")
+
+    # Sample within each 5km cell
+    rng = np.random.default_rng(seed)
+    results = []
+
+    for cell_id in grid_5km["id"].values:
+        cell_eligible = eligible[eligible[id_col] == cell_id]
+        n_avail = len(cell_eligible)
+        if n_avail == 0:
+            continue
+
+        n_select = min(n_required, n_avail)
+        selected_idx = rng.choice(cell_eligible.index, size=n_select, replace=False)
+
+        for i, idx in enumerate(selected_idx):
+            role = "primary" if i < n_primary else "reserve"
+            row = cell_eligible.loc[idx].copy()
+            row["selection_role"] = role
+            results.append(row)
+
+    selected = gpd.GeoDataFrame(results, crs=grid_500m.crs)
+
+    # Add sample_status from parent 5km cell
+    selected = selected.merge(
+        grid_5km[["id", "sample_status"]].rename(columns={"id": id_col}),
+        on=id_col, how="left",
+    )
+
+    # Drop redundant columns from upstream joins
+    drop_cols = ["feature_x", "feature_y", "nearest_x", "nearest_y", "distance", "n"]
+    selected = selected.drop(columns=drop_cols, errors="ignore")
+
+    # Add centroids (UTM for analysis, lat/lon for field devices)
+    selected["centroid_x"] = selected.geometry.centroid.x
+    selected["centroid_y"] = selected.geometry.centroid.y
+    centroids_wgs84 = selected.geometry.centroid.to_crs(epsg=4326)
+    selected["latitude"] = centroids_wgs84.y
+    selected["longitude"] = centroids_wgs84.x
+
+    n_primary_actual = (selected["selection_role"] == "primary").sum()
+    n_reserve_actual = (selected["selection_role"] == "reserve").sum()
+    print(f"Selected {len(selected)} sub-cells "
+          f"({n_primary_actual} primary, {n_reserve_actual} reserve) "
+          f"from {selected[id_col].nunique()} / {len(grid_5km)} cells")
+
+    return selected
+
+
+def save_selected_subcells(selected: gpd.GeoDataFrame, data_dir: Path) -> Path:
+    """Save selected sub-cells to GeoPackage.
+
+    Args:
+        selected: GeoDataFrame from select_subcells().
+        data_dir: Root data directory.
+
+    Returns:
+        Path to the saved file.
+    """
+    output_path = data_dir / "01_input_data" / "boundaries" / "selected_subcells_500m.gpkg"
+    selected.to_file(output_path, driver="GPKG")
+    print(f"Saved selected sub-cells ({len(selected)}) to {output_path}")
+    return output_path
+
+
+def load_selected_subcells(data_dir: Path) -> gpd.GeoDataFrame | None:
+    """Load previously selected sub-cells.
+
+    Args:
+        data_dir: Root data directory.
+
+    Returns:
+        GeoDataFrame of selected sub-cells, or None if file doesn't exist.
+    """
+    path = data_dir / "01_input_data" / "boundaries" / "selected_subcells_500m.gpkg"
+    if path.exists():
+        gdf = gpd.read_file(path)
+        print(f"Loaded {len(gdf)} selected sub-cells from {path}")
+        return gdf
+    print(f"Selected sub-cells not found: {path}")
+    return None
 
 
 def load_buildings(data_dir: Path) -> gpd.GeoDataFrame | None:

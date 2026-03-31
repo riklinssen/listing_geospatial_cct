@@ -16,6 +16,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import geopandas as gpd
+
 # Add project root to path so we can import src modules
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -27,6 +29,9 @@ from src.data_processing.load_boundaries import (
     load_subgrid_points,
     build_subgrid,
     save_subgrid,
+    load_control_grid,
+    select_subcells,
+    save_selected_subcells,
 )
 
 
@@ -56,12 +61,15 @@ def main():
     full_grid_path = boundaries_dir / "study_area_5km_flagged.gpkg"
     subgrid_500m_path = boundaries_dir / "subgrid_500m_control.gpkg"
     subgrid_1km_path = boundaries_dir / "subgrid_1000m_control.gpkg"
+    selected_path = boundaries_dir / "selected_subcells_500m.gpkg"
+    counts_path = data_dir / "02_outputs" / "building_counts" / "grid_500m_building_counts.gpkg"
 
     all_exist = (
         control_grid_path.exists()
         and full_grid_path.exists()
         and subgrid_500m_path.exists()
         and subgrid_1km_path.exists()
+        and selected_path.exists()
     )
 
     if not args.force and all_exist:
@@ -88,6 +96,18 @@ def main():
     subgrid_1km = build_subgrid(subgrid_points, control_grid, cell_size=1000)
     save_subgrid(subgrid_1km, data_dir, cell_size=1000)
 
+    # Select sub-cells (requires building counts from download_google_buildings.py)
+    print("\n--- Selecting 500m sub-cells ---")
+    if not counts_path.exists():
+        print(f"  Skipping: building counts not found at {counts_path}")
+        print("  Run first: python scripts/download_google_buildings.py --grid-size 500")
+        selected = None
+    else:
+        grid_500m_counts = gpd.read_file(counts_path)
+        print(f"  Loaded {len(grid_500m_counts)} sub-cells with building counts")
+        selected = select_subcells(control_grid, grid_500m_counts)
+        save_selected_subcells(selected, data_dir)
+
     # Summary
     print("\n" + "=" * 60)
     print("Build complete:")
@@ -96,12 +116,17 @@ def main():
     print(f"  Control grid:      {control_grid_path}")
     print(f"  Sub-grid (500m):   {subgrid_500m_path}")
     print(f"  Sub-grid (1km):    {subgrid_1km_path}")
+    print(f"  Selected sub-cells: {selected_path}")
     print()
     print(f"  Total 5km controls: {len(control_grid)}")
     print(f"    Sampled:          {(control_grid['sample_status'] == 'sampled').sum()}")
     print(f"    Replacement:      {(control_grid['sample_status'] == 'replacement').sum()}")
     print(f"  Sub-cells (500m):   {len(subgrid_500m)}")
     print(f"  Sub-cells (1km):    {len(subgrid_1km)}")
+    if selected is not None:
+        print(f"  Selected sub-cells: {len(selected)} "
+              f"({(selected['selection_role'] == 'primary').sum()} primary, "
+              f"{(selected['selection_role'] == 'reserve').sum()} reserve)")
 
 
 if __name__ == "__main__":
