@@ -41,6 +41,10 @@ from src.data_processing.load_boundaries import (
     validate_crs,
 )
 from src.mapping.map_generator import MapGenerator
+from src.mapping.mbtiles_export import (
+    export_overview_mbtiles,
+    export_detail_mbtiles,
+)
 
 
 def parse_args():
@@ -78,6 +82,22 @@ def parse_args():
     parser.add_argument(
         "--limit", type=int, default=None,
         help="Only process the first N cells (for testing).",
+    )
+    parser.add_argument(
+        "--mbtiles", action="store_true",
+        help="Also emit a styled .mbtiles file alongside each PNG (for SurveyCTO offline use).",
+    )
+    parser.add_argument(
+        "--mbtiles-only", action="store_true",
+        help="Only emit MBTiles, skip PNG generation. Implies --mbtiles.",
+    )
+    parser.add_argument(
+        "--mbtiles-detail-zoom", type=int, default=19,
+        help="Max zoom level for 500m detail MBTiles (default 19).",
+    )
+    parser.add_argument(
+        "--mbtiles-overview-zoom", type=int, default=15,
+        help="Max zoom level for 5km overview MBTiles (default 15).",
     )
     return parser.parse_args()
 
@@ -134,6 +154,10 @@ def export_subcell_geojson(
 
 def main():
     args = parse_args()
+
+    # --mbtiles-only implies --mbtiles
+    emit_mbtiles = args.mbtiles or args.mbtiles_only
+    emit_png = not args.mbtiles_only
 
     config = load_config()
     data_dir = get_data_dir(config)
@@ -220,16 +244,33 @@ def main():
 
         # Overview map (in the cell folder root)
         if not args.skip_overview:
-            generator.output_dir = cell_folder
-            label = f"{int(grid_id)} ({sample_status}) — {ward_name}"
-            generator.generate_overview(
-                grid_cell=cell,
-                grid_id=str(int(grid_id)),
-                selected_subcells=cell_selected,
-                all_grid_cells=grid_5km,
-                label=label,
-            )
-            total_maps += 1
+            cell_folder.mkdir(parents=True, exist_ok=True)
+            if emit_png:
+                generator.output_dir = cell_folder
+                label = f"{int(grid_id)} ({sample_status}) — {ward_name}"
+                generator.generate_overview(
+                    grid_cell=cell,
+                    grid_id=str(int(grid_id)),
+                    selected_subcells=cell_selected,
+                    all_grid_cells=grid_5km,
+                    label=label,
+                )
+                total_maps += 1
+            if emit_mbtiles:
+                try:
+                    overview_title = (
+                        f"5km cell {int(grid_id)} — {ward_name} ({sample_status})"
+                    )
+                    export_overview_mbtiles(
+                        grid_cell=cell,
+                        selected_subcells=cell_selected,
+                        output_path=cell_folder / "overview_5km.mbtiles",
+                        zoom=args.mbtiles_overview_zoom,
+                        title=overview_title,
+                    )
+                    total_maps += 1
+                except Exception as e:
+                    print(f"  MBTiles overview failed for {grid_id}: {e}")
 
         # Detail maps and GeoJSON (in primary/ or reserve/ subfolder)
         if not args.skip_detail:
@@ -238,22 +279,45 @@ def main():
             )
             for i, (_, subcell_row) in enumerate(cell_selected_sorted.iterrows(), 1):
                 role = subcell_row["selection_role"]
-                generator.output_dir = cell_folder / role
+                role_dir = cell_folder / role
+                role_dir.mkdir(parents=True, exist_ok=True)
                 subcell = cell_selected_sorted[cell_selected_sorted.index == subcell_row.name]
-                generator.generate_detail(
-                    subcell=subcell,
-                    grid_id=str(int(grid_id)),
-                    subcell_index=i,
-                    role=role,
-                    buildings=buildings,
-                )
-                total_maps += 1
+                subcell_id = subcell_row.get("grid_id", f"subcell_{i}")
+
+                if emit_png:
+                    generator.output_dir = role_dir
+                    generator.generate_detail(
+                        subcell=subcell,
+                        grid_id=str(int(grid_id)),
+                        subcell_index=i,
+                        role=role,
+                        buildings=buildings,
+                    )
+                    total_maps += 1
+
+                if emit_mbtiles:
+                    try:
+                        building_count = subcell_row.get("building_count", "?")
+                        detail_title = (
+                            f"5km: {int(grid_id)} — 500m: {subcell_id} "
+                            f"({role}) — {building_count} buildings"
+                        )
+                        export_detail_mbtiles(
+                            subcell=subcell,
+                            output_path=role_dir / f"subcell_{subcell_id}_{role}.mbtiles",
+                            buildings=buildings,
+                            role=role,
+                            zoom=args.mbtiles_detail_zoom,
+                            title=detail_title,
+                        )
+                        total_maps += 1
+                    except Exception as e:
+                        print(f"  MBTiles detail failed for {grid_id}/{subcell_id}: {e}")
 
                 # Export sub-cell polygon as GeoJSON (WGS84 for SurveyCTO)
-                subcell_id = subcell_row.get("grid_id", f"subcell_{i}")
                 export_subcell_geojson(
                     subcell_row, subcells_crs=selected.crs,
-                    output_dir=cell_folder / role,
+                    output_dir=role_dir,
                     grid_id=int(grid_id), subcell_id=subcell_id, role=role,
                 )
 
