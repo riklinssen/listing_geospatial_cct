@@ -10,6 +10,11 @@ paths:
   # Output directory (within Google Drive by default)
   output_dir: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/1_Baseline/0.4_listing_geospatial/02_outputs"
 
+  # CCT-provided VCSL village flags (5km-pixel level). Lives in the listing
+  # input tree, outside data_dir. Used during the data build to flag selected
+  # sub-cells and the control grid with their VCSL village via attribute merge.
+  vcsl_flags: "G:/Shared drives/TZ-CCT_RUBEV-0825/Data/0_Listing/1_Input/grid_info/_temp/Sampled_control_pixels.gpkg"
+
 # Map generation settings
 map_settings:
   # Tablet-optimized resolution (1920x1080)

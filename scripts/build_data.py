@@ -32,6 +32,8 @@ from src.data_processing.load_boundaries import (
     load_control_grid,
     select_subcells,
     save_selected_subcells,
+    load_vcsl_flags,
+    flag_vcsl_villages,
 )
 
 
@@ -63,6 +65,13 @@ def main():
     subgrid_1km_path = boundaries_dir / "subgrid_1000m_control.gpkg"
     selected_path = boundaries_dir / "selected_subcells_500m.gpkg"
     counts_path = data_dir / "02_outputs" / "building_counts" / "grid_500m_building_counts.gpkg"
+
+    # CCT VCSL village flags (5km-pixel level); path from config, falls back to
+    # a copy in the boundaries folder if the configured path is unset/missing.
+    vcsl_flags_path = Path(
+        config["paths"].get("vcsl_flags")
+        or (boundaries_dir / "Sampled_control_pixels.gpkg")
+    )
 
     all_exist = (
         control_grid_path.exists()
@@ -106,8 +115,18 @@ def main():
         grid_500m_counts = gpd.read_file(counts_path)
         print(f"  Loaded {len(grid_500m_counts)} sub-cells with building counts")
         selected, updated_grid = select_subcells(control_grid, grid_500m_counts)
+
+        # Attach CCT VCSL village flags via attribute merge on the 5km id
+        print("\n--- Flagging VCSL villages ---")
+        if vcsl_flags_path.exists():
+            vcsl_flags = load_vcsl_flags(vcsl_flags_path)
+            selected = flag_vcsl_villages(selected, vcsl_flags, id_col="5km_id")
+            updated_grid = flag_vcsl_villages(updated_grid, vcsl_flags, id_col="id")
+        else:
+            print(f"  VCSL flags file not found at {vcsl_flags_path} — skipping.")
+
         save_selected_subcells(selected, data_dir)
-        # Save updated 5km grid (with replacement activations)
+        # Save updated 5km grid (with replacement activations + VCSL flags)
         save_control_grid(updated_grid, data_dir)
         control_grid = updated_grid
 

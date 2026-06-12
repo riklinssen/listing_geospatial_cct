@@ -82,6 +82,16 @@ def get_district(grid_id, selected_subcells: gpd.GeoDataFrame) -> str:
     return "—"
 
 
+def get_vcsl_village(grid_id, selected_subcells: gpd.GeoDataFrame) -> str:
+    """Get the CCT VCSL village label(s) for a cell, or '—' if none."""
+    cell_subcells = selected_subcells[selected_subcells["5km_id"] == grid_id]
+    if "vcsl_village" in cell_subcells.columns:
+        vals = cell_subcells["vcsl_village"].dropna().unique()
+        if len(vals) > 0:
+            return ", ".join(sorted(str(v) for v in vals))
+    return "—"
+
+
 def google_maps_url(lat: float, lon: float) -> str:
     return f"https://www.google.com/maps?q={lat:.6f},{lon:.6f}"
 
@@ -120,6 +130,7 @@ def generate_html(
     district: str,
     subcells: gpd.GeoDataFrame,
     images: dict,
+    vcsl_village: str = "—",
 ) -> str:
     """Build the HTML content for one cell's info sheet."""
 
@@ -366,6 +377,10 @@ def generate_html(
             <div class="value">{sample_status}</div>
         </div>
         <div class="meta-card">
+            <div class="label">VCSL Village</div>
+            <div class="value">{vcsl_village}</div>
+        </div>
+        <div class="meta-card">
             <div class="label">Selected Sub-cells</div>
             <div class="value">{len(subcells_sorted)}</div>
         </div>
@@ -457,6 +472,7 @@ def main():
 
         ward_name = get_ward_name(grid_id, cell_selected)
         district = get_district(grid_id, cell_selected)
+        vcsl_village = get_vcsl_village(grid_id, cell_selected)
         cell_folder = output_dir / sample_status / f"{ward_name}_{int(grid_id)}"
         cell_folder.mkdir(parents=True, exist_ok=True)
 
@@ -470,6 +486,7 @@ def main():
             district=district,
             subcells=cell_selected,
             images=images,
+            vcsl_village=vcsl_village,
         )
 
         html_path = cell_folder / "info_sheet.html"

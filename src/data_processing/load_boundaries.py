@@ -532,6 +532,85 @@ def load_selected_subcells(data_dir: Path) -> gpd.GeoDataFrame | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# VCSL village flags (CCT-provided, 5km-pixel level)
+# ---------------------------------------------------------------------------
+
+
+def load_vcsl_flags(flagged_path: Path) -> gpd.GeoDataFrame:
+    """Load the CCT-provided VCSL village flags.
+
+    This is the ``Sampled_control_pixels.gpkg`` file handed over by CCT, where
+    each 5km control pixel carries a ``VCSL_village`` label (or None where the
+    pixel has no flagged village).
+
+    Args:
+        flagged_path: Path to the flagged GeoPackage.
+
+    Returns:
+        GeoDataFrame with at least ``id5km`` and ``VCSL_village`` columns.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    if not flagged_path.exists():
+        raise FileNotFoundError(f"VCSL flags file not found: {flagged_path}")
+    gdf = gpd.read_file(flagged_path)
+    n_villages = gdf["VCSL_village"].notna().sum()
+    print(f"Loaded {len(gdf)} VCSL flag records from {flagged_path} "
+          f"({n_villages} with a village label)")
+    return gdf
+
+
+def flag_vcsl_villages(
+    cells: gpd.GeoDataFrame,
+    vcsl_flags: gpd.GeoDataFrame,
+    id_col: str = "5km_id",
+    source_id_col: str = "id5km",
+    village_col: str = "VCSL_village",
+    out_col: str = "vcsl_village",
+) -> gpd.GeoDataFrame:
+    """Attach the CCT VCSL village label via an attribute merge on the 5km id.
+
+    The VCSL flags are keyed at the 5km-pixel level (``id5km``). Each input
+    cell is matched to its parent 5km pixel by ``id_col`` and assigned the
+    corresponding ``VCSL_village`` (or None where the pixel is unflagged).
+
+    This is an attribute merge, not a spatial join: it assumes one village per
+    5km pixel, so every sub-cell within a pixel inherits the same label.
+
+    Args:
+        cells: GeoDataFrame to flag (selected sub-cells use ``5km_id``;
+            the 5km control grid uses ``id``).
+        vcsl_flags: GeoDataFrame from :func:`load_vcsl_flags`.
+        id_col: Column in ``cells`` holding the 5km cell id.
+        source_id_col: Column in ``vcsl_flags`` holding the 5km cell id.
+        village_col: Column in ``vcsl_flags`` holding the village label.
+        out_col: Name of the column to write the village label into.
+
+    Returns:
+        Copy of ``cells`` with an added ``out_col`` column.
+    """
+    # Build a clean id5km -> village lookup (drop unflagged pixels, dedupe)
+    flagged = vcsl_flags[vcsl_flags[village_col].notna()].dropna(subset=[source_id_col])
+    lookup = (
+        flagged.drop_duplicates(subset=[source_id_col])
+        .set_index(source_id_col)[village_col]
+    )
+    lookup = {int(k): v for k, v in lookup.items()}
+
+    cells = cells.copy()
+    cells[out_col] = cells[id_col].map(
+        lambda x: lookup.get(int(x)) if pd.notna(x) else None
+    )
+
+    n_flagged = cells[out_col].notna().sum()
+    villages = sorted(cells.loc[cells[out_col].notna(), out_col].unique())
+    print(f"Flagged {n_flagged} / {len(cells)} cells with a VCSL village "
+          f"({len(villages)} distinct: {', '.join(villages) if villages else '—'})")
+    return cells
+
+
 def load_buildings(data_dir: Path) -> gpd.GeoDataFrame | None:
     """Load Google Open Buildings footprints from parquet.
 

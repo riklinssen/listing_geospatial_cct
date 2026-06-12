@@ -117,6 +117,15 @@ def get_ward_name(grid_id, selected_subcells: gpd.GeoDataFrame) -> str:
     return "unknown_ward"
 
 
+def get_vcsl_village(selected_subcells: gpd.GeoDataFrame) -> str | None:
+    """Get the CCT VCSL village label(s) for a cell's sub-cells, or None."""
+    if "vcsl_village" in selected_subcells.columns:
+        vals = selected_subcells["vcsl_village"].dropna().unique()
+        if len(vals) > 0:
+            return ", ".join(sorted(str(v) for v in vals))
+    return None
+
+
 def export_subcell_geojson(
     subcell_row, subcells_crs, output_dir: Path,
     grid_id: int, subcell_id, role: str,
@@ -141,6 +150,11 @@ def export_subcell_geojson(
                 "building_count": int(subcell_row.get("building_count", 0)),
                 "latitude": float(subcell_row.get("latitude", 0)),
                 "longitude": float(subcell_row.get("longitude", 0)),
+                "vcsl_village": (
+                    str(subcell_row["vcsl_village"])
+                    if pd.notna(subcell_row.get("vcsl_village"))
+                    else None
+                ),
             },
             "geometry": mapping(geom),
         }],
@@ -261,6 +275,9 @@ def main():
                     overview_title = (
                         f"5km cell {int(grid_id)} — {ward_name} ({sample_status})"
                     )
+                    cell_vcsl = get_vcsl_village(cell_selected)
+                    if cell_vcsl:
+                        overview_title += f" — VCSL: {cell_vcsl}"
                     export_overview_mbtiles(
                         grid_cell=cell,
                         selected_subcells=cell_selected,
@@ -302,6 +319,9 @@ def main():
                             f"5km: {int(grid_id)} — 500m: {subcell_id} "
                             f"({role}) — {building_count} buildings"
                         )
+                        sc_vcsl = subcell_row.get("vcsl_village")
+                        if pd.notna(sc_vcsl):
+                            detail_title += f" — VCSL: {sc_vcsl}"
                         export_detail_mbtiles(
                             subcell=subcell,
                             output_path=role_dir / f"subcell_{subcell_id}_{role}.mbtiles",
