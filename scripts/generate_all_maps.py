@@ -5,12 +5,15 @@ For each 5km control cell, generates:
   2. A detail map per selected 500m sub-cell (with building footprints)
 
 Output folder structure:
-  <output_dir>/<ward_name>_<5km_id>/
+  <output_dir>/<status>/<ward_name>_<5km_id>/
       overview_5km.png
-      subcell_1_primary.png
-      subcell_2_primary.png
-      subcell_3_reserve.png
-      subcell_4_reserve.png
+      overview_5km.mbtiles            (with --mbtiles)
+      primary/  reserve/  ...PNGs + GeoJSON per sub-cell
+
+  500m sub-cell MBTiles (with --mbtiles) are written as flat layers:
+  <output_dir>/layers/<ward_name>_<5km_id>_<status>_<subcell_id>/
+      <ward_name>_<5km_id>_<status>_<subcell_id>.mbtiles
+  <output_dir>/layers/samplegrids_primary_replacement.xlsx   (index of all layers)
 
 Usage:
     python scripts/generate_all_maps.py
@@ -240,6 +243,7 @@ def main():
     # Generate maps
     total_cells = len(grid_5km)
     total_maps = 0
+    layer_rows = []  # one entry per sub-cell MBTiles layer (for the index xlsx)
     print(f"\nGenerating maps for {total_cells} cells...")
 
     for _, row in tqdm(grid_5km.iterrows(), total=total_cells, desc="Cells"):
@@ -315,22 +319,50 @@ def main():
                 if emit_mbtiles:
                     try:
                         building_count = subcell_row.get("building_count", "?")
+                        sc_vcsl = subcell_row.get("vcsl_village")
                         detail_title = (
                             f"5km: {int(grid_id)} — 500m: {subcell_id} "
                             f"({role}) — {building_count} buildings"
                         )
-                        sc_vcsl = subcell_row.get("vcsl_village")
                         if pd.notna(sc_vcsl):
                             detail_title += f" — VCSL: {sc_vcsl}"
+
+                        # Flat per-layer folder under <output_dir>/layers/:
+                        #   layers/<ward>_<5km_id>_<status>_<subcell_id>/<same>.mbtiles
+                        layer_name = (
+                            f"{ward_name}_{int(grid_id)}_{sample_status}_"
+                            f"{sanitize_name(str(subcell_id))}"
+                        )
+                        layer_dir = output_dir / "layers" / layer_name
+                        layer_dir.mkdir(parents=True, exist_ok=True)
+
                         export_detail_mbtiles(
                             subcell=subcell,
-                            output_path=role_dir / f"subcell_{subcell_id}_{role}.mbtiles",
+                            output_path=layer_dir / f"{layer_name}.mbtiles",
                             buildings=buildings,
                             role=role,
                             zoom=args.mbtiles_detail_zoom,
                             title=detail_title,
                         )
                         total_maps += 1
+
+                        layer_rows.append({
+                            "layer": layer_name,
+                            "ward_name": ward_name,
+                            "5km_id": int(grid_id),
+                            "subcell_id": subcell_id,
+                            "sample_status": sample_status,
+                            "selection_role": role,
+                            "building_count": (
+                                building_count if building_count != "?" else None
+                            ),
+                            "vcsl_village": sc_vcsl if pd.notna(sc_vcsl) else None,
+                            "latitude": subcell_row.get("latitude"),
+                            "longitude": subcell_row.get("longitude"),
+                            "mbtiles_path": str(
+                                Path("layers") / layer_name / f"{layer_name}.mbtiles"
+                            ),
+                        })
                     except Exception as e:
                         print(f"  MBTiles detail failed for {grid_id}/{subcell_id}: {e}")
 
@@ -340,6 +372,15 @@ def main():
                     output_dir=role_dir,
                     grid_id=int(grid_id), subcell_id=subcell_id, role=role,
                 )
+
+    # Write the layer index (one row per sub-cell MBTiles layer)
+    if emit_mbtiles and layer_rows:
+        layers_dir = output_dir / "layers"
+        layers_dir.mkdir(parents=True, exist_ok=True)
+        index_df = pd.DataFrame(layer_rows)
+        index_path = layers_dir / "samplegrids_primary_replacement.xlsx"
+        index_df.to_excel(index_path, index=False, sheet_name="sample_grids")
+        print(f"Wrote layer index ({len(index_df)} layers) to {index_path}")
 
     print(f"\nDone! Generated {total_maps} maps across {total_cells} cells")
     print(f"Output: {output_dir}")
