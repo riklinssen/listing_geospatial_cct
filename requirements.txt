@@ -99,6 +99,7 @@ notebook_shim==0.2.4
 numpy==2.4.2
 open-buildings==0.10.0
 openlocationcode==1.0.1
+openpyxl==3.1.5
 osmnx==2.0.7
 overturemaps==0.18.0
 packaging==26.0
