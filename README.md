@@ -44,15 +44,18 @@ python scripts/run_all.py --mbtiles --output-dir "G:\Shared drives\...\0_Listing
 Or step by step, in order:
 
 ```bash
-# 1. Build grids + PPS sub-cell selection
+# 1. Build grids + PPS sub-cell selection + VCSL village flags
 #    Writes:  01_input_data/boundaries/control_grid_5km_flagged.gpkg
 #             01_input_data/boundaries/selected_subcells_500m.gpkg
+#    Both get a `vcsl_village` column via an attribute merge with the CCT-provided
+#    Sampled_control_pixels.gpkg (see Data Location — it lives outside data_dir).
 python scripts/build_data.py --force
 
 # 2. Generate maps + GeoJSON polygons (+ optionally MBTiles)
 #    Reads:   the two .gpkg files above + overture_buildings.parquet
 #    Writes:  overview_5km.png, subcell_<id>_<role>.png, subcell_<id>_<role>.geojson
-#             overview_5km.mbtiles, subcell_<id>_<role>.mbtiles   (with --mbtiles)
+#             overview_5km.mbtiles                          (per cell folder, with --mbtiles)
+#             layers/<ward>_<5km_id>_<status>_<subcell_id>/...mbtiles + samplegrids_*.xlsx (with --mbtiles)
 python scripts/generate_all_maps.py --output-dir "G:\...\1_Input"
 python scripts/generate_all_maps.py --mbtiles --output-dir "G:\...\1_Input"
 
@@ -62,7 +65,7 @@ python scripts/generate_all_maps.py --mbtiles --output-dir "G:\...\1_Input"
 python scripts/generate_info_sheets.py --output-dir "G:\...\1_Input"
 ```
 
-**Important**: step 3 must run *after* step 2 — the info sheet embeds the PNG maps by filename. MBTiles files are not referenced by the info sheet; they're dropped into the cell folder for SurveyCTO to pick up directly.
+**Important**: step 3 must run *after* step 2 — the info sheet embeds the PNG maps by filename. MBTiles files are not referenced by the info sheet: the 5km overview tile is dropped into the cell folder, and the 500m sub-cell tiles go to `layers/` (see Output Structure) for SurveyCTO to pick up directly.
 
 Test with a few cells first: add `--limit 3` to any command, or `--single <5km_id>` to target one cell.
 
@@ -94,28 +97,39 @@ python scripts/download_google_buildings.py --grid-size 500 --visualize
 │   └── <ward_name>_<5km_id>/
 │       ├── info_sheet.html                   # metadata, interactive Leaflet maps, Google Maps links
 │       ├── overview_5km.png                  # 5km cell with sub-cells highlighted
-│       ├── overview_5km.mbtiles              # (optional) same content as MBTiles for SurveyCTO
+│       ├── overview_5km.mbtiles              # (optional) 5km overview tiles — stays in the cell folder
 │       ├── primary/
 │       │   ├── subcell_<id>_primary.png      # detail map with buildings + centroid crosshair
-│       │   ├── subcell_<id>_primary.mbtiles  # (optional) same content as MBTiles
 │       │   └── subcell_<id>_primary.geojson  # polygon for SurveyCTO
 │       └── reserve/
 │           ├── subcell_<id>_reserve.png
-│           ├── subcell_<id>_reserve.mbtiles
 │           └── subcell_<id>_reserve.geojson
-└── replacement/
-    └── ...
+├── replacement/
+│   └── ...
+└── layers/                                   # ⚠️ 500m sub-cell MBTiles live HERE, not in the cell folders
+    ├── <ward_name>_<5km_id>_<status>_<subcell_id>/
+    │   └── <ward_name>_<5km_id>_<status>_<subcell_id>.mbtiles
+    └── samplegrids_primary_replacement.xlsx  # index of every layer (ward, 5km_id, status, role,
+                                              #   building count, VCSL village, lat/lon, mbtiles path)
 ```
 
-The `.mbtiles` files are only written when `--mbtiles` (or `--mbtiles-only`) is passed.
+> **⚠️ MBTiles are split across two places.** The 5km **overview** tiles (`overview_5km.mbtiles`) sit
+> inside each cell folder under `sampled/`/`replacement/`, next to the PNGs. The 500m **sub-cell**
+> tiles are *not* in the cell folders — they are written as flat, self-named layers under
+> `layers/<ward>_<5km_id>_<status>_<subcell_id>/`, each with a matching `samplegrids_primary_replacement.xlsx`
+> index. This keeps the per-sub-cell tiles in one easy-to-load place for SurveyCTO.
+
+The `.mbtiles` files (and the `layers/` folder + xlsx) are only written when `--mbtiles`
+(or `--mbtiles-only`) is passed.
 
 ### Map features
 
 - **Overview (5km)**: Google Hybrid basemap (satellite + village labels), 5km cell boundary, selected sub-cells outlined (green=primary, goldenrod=reserve), red crosshair at each sub-cell centroid
 - **Detail (500m)**: Google Hybrid basemap, building footprints (yellow/orange), sub-cell boundary in green/goldenrod, red crosshair at the centroid
 - **Info sheet**: Cell metadata, sub-cell table, Google Maps links, interactive Leaflet maps with polygon overlay
-- **GeoJSON**: WGS84 polygons per sub-cell for SurveyCTO integration
+- **GeoJSON**: WGS84 polygons per sub-cell for SurveyCTO integration (includes the `vcsl_village` property)
 - **MBTiles**: Georeferenced raster tiles (same overlays as the PNG burned into the pixels) for SurveyCTO offline basemaps — see below
+- **VCSL village flag**: cells overlapping a CCT-flagged VCSL village carry a `vcsl_village` label, surfaced on the info sheet, in the GeoJSON, in the MBTiles title banner, and in `layers/samplegrids_primary_replacement.xlsx`
 
 ## MBTiles (offline basemaps for SurveyCTO)
 
@@ -131,14 +145,19 @@ python scripts/generate_all_maps.py --mbtiles --single 13151
 python scripts/generate_all_maps.py --mbtiles-only
 ```
 
-Each `.mbtiles` file has a title banner burned *above* the geographic bbox (so it never obscures map content) showing the cell ID, sub-cell ID, role, and building count.
+Each `.mbtiles` file has a title banner burned *above* the geographic bbox (so it never obscures map content) showing the cell ID, sub-cell ID, role, building count, and the VCSL village (when the cell is flagged).
+
+The 500m sub-cell tiles are written to `layers/` as self-named files
+(`<ward>_<5km_id>_<status>_<subcell_id>.mbtiles`), each in its own folder, with a
+`samplegrids_primary_replacement.xlsx` listing every layer. The 5km overview tiles stay in the
+per-cell folder. See **Output Structure** above.
 
 **File size / zoom trade-off.** Defaults are `detail=19`, `overview=15`. Typical sizes:
 
-| File                       | Default zoom | Typical size |
-| -------------------------- | ------------ | ------------ |
-| `subcell_<id>_<role>.mbtiles` | 19        | 1–3 MB       |
-| `overview_5km.mbtiles`     | 15           | 2–8 MB       |
+| File                                            | Default zoom | Typical size |
+| ----------------------------------------------- | ------------ | ------------ |
+| `layers/.../<...>_<subcell_id>.mbtiles` (500m)  | 19           | 1–3 MB       |
+| `overview_5km.mbtiles` (5km)                    | 15           | 2–8 MB       |
 
 Drop zoom by 1 to roughly halve the file size:
 
@@ -187,16 +206,25 @@ listing_geospatial_cct/
 
 ## Data Location
 
-All geospatial data lives on Google Drive (not in this repo):
+All geospatial data lives on Google Drive (not in this repo). Most of it sits under the
+`data_dir` (`0.4_listing_geospatial`), **but the VCSL flags file is in a different tree** — the
+listing input folder, not `data_dir`:
 
 ```
-0.4_listing_geospatial/
+1_Baseline/0.4_listing_geospatial/         # <- data_dir (config paths.data_dir)
 ├── 01_input_data/
-│   ├── boundaries/              # 5km grid, sub-grids, selected sub-cells
+│   ├── boundaries/              # 5km grid, sub-grids, selected sub-cells (now incl. vcsl_village)
 │   └── base_layers/             # overture_buildings.parquet, roads
 └── 02_outputs/
     └── building_counts/         # Grid files with building counts + choropleths
+
+0_Listing/1_Input/grid_info/_temp/         # <- DIFFERENT tree, outside data_dir
+└── Sampled_control_pixels.gpkg # CCT-provided VCSL village flags (5km-pixel level)
 ```
+
+The VCSL flags path is configured separately as `paths.vcsl_flags` in `config/config.yaml`
+(override it in `config.local.yaml` if your mount differs). `build_data.py` reads it to add the
+`vcsl_village` column to the control grid and selected sub-cells.
 
 ## Configuration
 
