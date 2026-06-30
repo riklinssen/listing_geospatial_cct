@@ -44,7 +44,12 @@ def main():
     sel = flag_vcsl_villages(sel, load_vcsl_flags(Path(config["paths"]["vcsl_flags"])), id_col="5km_id")
     by_grid = sel.set_index("grid_id")
 
-    pat = re.compile(r"^(?P<ward>.+)_(?P<id5km>\d+)_(?P<status>sampled|replacement)_(?P<sub>G_\d+_\d+)$")
+    # <ward>_<5km_id>_<5km_status>_<role>_<subcell_id> ; role optional for
+    # backward-compat with names that predate the role token.
+    pat = re.compile(
+        r"^(?P<ward>.+)_(?P<id5km>\d+)_(?P<status>sampled|replacement)"
+        r"(?:_(?P<role>primary|reserve))?_(?P<sub>G_\d+_\d+)$"
+    )
 
     rows = []
     for folder in sorted(p for p in layers.iterdir() if p.is_dir()):
@@ -58,12 +63,16 @@ def main():
             continue
         sub = m.group("sub")
         r = by_grid.loc[sub] if sub in by_grid.index else None
+        # Source admin labels per-sub-cell from selected_subcells (authoritative);
+        # fall back to the folder name only if a sub-cell is missing from it.
         rows.append({
             "layer": folder.name,
-            "ward_name": m.group("ward"),
+            "ward_name": (r["ward_name"] if r is not None else m.group("ward")),
+            "district": (r["district"] if r is not None else None),
+            "region": (r["region"] if r is not None else None),
             "5km_id": int(m.group("id5km")),
             "subcell_id": sub,
-            "sample_status": m.group("status"),
+            "sample_status": (r["sample_status"] if r is not None else m.group("status")),
             "selection_role": (r["selection_role"] if r is not None else None),
             "building_count": (int(r["building_count"]) if r is not None and pd.notna(r["building_count"]) else None),
             "vcsl_village": (r["vcsl_village"] if r is not None and pd.notna(r["vcsl_village"]) else None),

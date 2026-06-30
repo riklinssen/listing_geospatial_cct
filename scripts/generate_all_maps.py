@@ -129,6 +129,20 @@ def get_vcsl_village(selected_subcells: gpd.GeoDataFrame) -> str | None:
     return None
 
 
+def cell_value(cell_subcells: gpd.GeoDataFrame, col: str, default) -> str:
+    """Most common non-null value of a column across a 5km cell's sub-cells.
+
+    A 5km cell can span several wards/districts; this returns the dominant one
+    for cell-level folder naming. For sample_status (uniform per cell) it just
+    returns that status.
+    """
+    if col in cell_subcells.columns:
+        vals = cell_subcells[col].dropna()
+        if len(vals) > 0:
+            return str(vals.mode().iloc[0])
+    return default
+
+
 def export_subcell_geojson(
     subcell_row, subcells_crs, output_dir: Path,
     grid_id: int, subcell_id, role: str,
@@ -216,8 +230,11 @@ def main():
 
     # Filter to single cell
     if args.single:
-        grid_5km = grid_5km[grid_5km["id"].astype(str) == str(args.single)].copy()
-        selected = selected[selected["5km_id"].astype(str) == str(args.single)].copy()
+        single_id = int(args.single)
+        grid_5km = grid_5km[grid_5km["id"].astype(int) == single_id].copy()
+        # 5km_id is stored as a float (e.g. 13130.0); compare numerically, not as
+        # strings ("13130.0" != "13130" would drop every sub-cell).
+        selected = selected[selected["5km_id"].fillna(-1).astype(int) == single_id].copy()
         if len(grid_5km) == 0:
             print(f"Error: Cell '{args.single}' not found.")
             sys.exit(1)
@@ -255,17 +272,25 @@ def main():
             print(f"  Skipping cell {grid_id}: no selected sub-cells")
             continue
 
-        # Folder structure: <status>/<ward_name>_<5km_id>/<role>/
-        sample_status = row["sample_status"]  # "sampled" or "replacement"
-        ward_name = get_ward_name(grid_id, cell_selected)
-        cell_folder = output_dir / sample_status / f"{ward_name}_{int(grid_id)}"
+        # Folder structure: <status>/<region>_<district>_<5km_id>/<role>/
+        # Status comes from the SELECTED sub-cells (post-activation), not the
+        # possibly-stale control grid. A 5km cell is one cluster that can span
+        # wards/districts, so the cell folder is named by its dominant
+        # region/district rather than a single (misleading) ward.
+        sample_status = cell_value(cell_selected, "sample_status", row["sample_status"])
+        cell_district = cell_value(cell_selected, "district", "unknown")
+        cell_region = cell_value(cell_selected, "region", "unknown")
+        ward_name = get_ward_name(grid_id, cell_selected)  # representative, for overview labels
+        cell_label = sanitize_name(f"{cell_region}_{cell_district}")
+        cell_folder = output_dir / sample_status / f"{cell_label}_{int(grid_id)}"
 
         # Overview map (in the cell folder root)
         if not args.skip_overview:
             cell_folder.mkdir(parents=True, exist_ok=True)
             if emit_png:
                 generator.output_dir = cell_folder
-                label = f"{int(grid_id)} ({sample_status}) — {ward_name}"
+                # No single ward here — a 5km cell can span several wards.
+                label = f"5km cell {int(grid_id)} ({sample_status}) — {cell_district}, {cell_region}"
                 generator.generate_overview(
                     grid_cell=cell,
                     grid_id=str(int(grid_id)),
@@ -277,7 +302,7 @@ def main():
             if emit_mbtiles:
                 try:
                     overview_title = (
-                        f"5km cell {int(grid_id)} — {ward_name} ({sample_status})"
+                        f"5km cell {int(grid_id)} — {cell_district}, {cell_region} ({sample_status})"
                     )
                     cell_vcsl = get_vcsl_village(cell_selected)
                     if cell_vcsl:
@@ -327,10 +352,21 @@ def main():
                         if pd.notna(sc_vcsl):
                             detail_title += f" — VCSL: {sc_vcsl}"
 
+                        # Per-sub-cell admin labels — the ward the sub-cell's
+                        # centroid actually sits in (not the cell-level label).
+                        sc_ward = subcell_row.get("ward_name")
+                        sc_district = subcell_row.get("district")
+                        sc_region = subcell_row.get("region")
+                        sc_status = subcell_row.get("sample_status", sample_status)
+                        ward_token = (sanitize_name(str(sc_ward))
+                                      if pd.notna(sc_ward) else ward_name)
+
                         # Flat per-layer folder under <output_dir>/layers/:
-                        #   layers/<ward>_<5km_id>_<status>_<subcell_id>/<same>.mbtiles
+                        #   layers/<ward>_<5km_id>_<5km_status>_<role>_<subcell_id>/<same>.mbtiles
+                        # 5km_status = sampled/replacement (the cell); role =
+                        # primary/reserve (this 500m sub-cell within the cell).
                         layer_name = (
-                            f"{ward_name}_{int(grid_id)}_{sample_status}_"
+                            f"{ward_token}_{int(grid_id)}_{sc_status}_{role}_"
                             f"{sanitize_name(str(subcell_id))}"
                         )
                         layer_dir = output_dir / "layers" / layer_name
@@ -348,10 +384,12 @@ def main():
 
                         layer_rows.append({
                             "layer": layer_name,
-                            "ward_name": ward_name,
+                            "ward_name": sc_ward,
+                            "district": sc_district,
+                            "region": sc_region,
                             "5km_id": int(grid_id),
                             "subcell_id": subcell_id,
-                            "sample_status": sample_status,
+                            "sample_status": sc_status,
                             "selection_role": role,
                             "building_count": (
                                 building_count if building_count != "?" else None
