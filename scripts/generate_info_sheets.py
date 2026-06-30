@@ -159,13 +159,28 @@ def generate_html(
             else f'<span class="badge reserve">{role}</span>'
         )
 
+        # Per-sub-cell admin labels + the matching layers/ folder name
+        ward = sc.get("ward_name", "—")
+        dist = sc.get("district", "—")
+        reg = sc.get("region", "—")
+        sc_status = sc.get("sample_status", sample_status)
+        id5 = sc.get("5km_id")
+        layer = (
+            f"{sanitize_name(str(ward))}_{int(id5)}_{sc_status}_{role}_{sc_id}"
+            if id5 is not None and pd.notna(id5) else "—"
+        )
+
         rows_html += f"""
         <tr>
             <td>{sc_id}</td>
             <td>{role_badge}</td>
+            <td>{ward}</td>
+            <td>{dist}</td>
+            <td>{reg}</td>
             <td>{buildings}</td>
             <td>{coords}</td>
             <td>{maps_link}</td>
+            <td><code>{layer}</code></td>
         </tr>"""
 
     # Build Leaflet mini-maps for each sub-cell
@@ -231,7 +246,7 @@ def generate_html(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cell {grid_id} — {ward_name}</title>
+    <title>Cell {grid_id}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -357,20 +372,12 @@ def generate_html(
     </style>
 </head>
 <body>
-    <h1>Cell {grid_id} — {ward_name}</h1>
+    <h1>Cell {grid_id} ({sample_status})</h1>
 
     <div class="meta">
         <div class="meta-card">
             <div class="label">5km Cell ID</div>
             <div class="value">{grid_id}</div>
-        </div>
-        <div class="meta-card">
-            <div class="label">Ward</div>
-            <div class="value">{ward_name}</div>
-        </div>
-        <div class="meta-card">
-            <div class="label">District</div>
-            <div class="value">{district}</div>
         </div>
         <div class="meta-card">
             <div class="label">Sample Status</div>
@@ -392,9 +399,13 @@ def generate_html(
             <tr>
                 <th>Sub-cell ID</th>
                 <th>Role</th>
+                <th>Ward</th>
+                <th>District</th>
+                <th>Region</th>
                 <th>Buildings</th>
                 <th>Centroid (lat, lon)</th>
                 <th>Navigate</th>
+                <th>Layer folder</th>
             </tr>
         </thead>
         <tbody>
@@ -446,8 +457,9 @@ def main():
         print(f"Filtered to '{args.status}': {len(grid_5km)} cells")
 
     if args.single:
-        grid_5km = grid_5km[grid_5km["id"].astype(str) == str(args.single)].copy()
-        selected = selected[selected["5km_id"].astype(str) == str(args.single)].copy()
+        single_id = int(args.single)
+        grid_5km = grid_5km[grid_5km["id"].astype(int) == single_id].copy()
+        selected = selected[selected["5km_id"].fillna(-1).astype(int) == single_id].copy()
         if len(grid_5km) == 0:
             print(f"Error: Cell '{args.single}' not found.")
             sys.exit(1)
@@ -464,16 +476,23 @@ def main():
 
     for _, row in tqdm(grid_5km.iterrows(), total=total, desc="Info sheets"):
         grid_id = row["id"]
-        sample_status = row["sample_status"]
         cell_selected = selected[selected["5km_id"] == grid_id]
 
         if len(cell_selected) == 0:
             continue
 
-        ward_name = get_ward_name(grid_id, cell_selected)
-        district = get_district(grid_id, cell_selected)
+        # Correct (post-activation) status + dominant region/district from the
+        # selected sub-cells — must match the renamed folders on disk:
+        #   <status>/<region>_<district>_<5km_id>/
+        sample_status = str(cell_selected["sample_status"].mode().iloc[0])
+        cell_region = (str(cell_selected["region"].dropna().mode().iloc[0])
+                       if cell_selected["region"].notna().any() else "unknown")
+        cell_district = (str(cell_selected["district"].dropna().mode().iloc[0])
+                         if cell_selected["district"].notna().any() else "unknown")
+        ward_name = get_ward_name(grid_id, cell_selected)  # unused in HTML; kept for signature
+        district = cell_district
         vcsl_village = get_vcsl_village(grid_id, cell_selected)
-        cell_folder = output_dir / sample_status / f"{ward_name}_{int(grid_id)}"
+        cell_folder = output_dir / sample_status / f"{sanitize_name(cell_region + '_' + cell_district)}_{int(grid_id)}"
         cell_folder.mkdir(parents=True, exist_ok=True)
 
         # Find existing map images
