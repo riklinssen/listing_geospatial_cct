@@ -53,3 +53,9 @@ htmlcov/
 # Claude Code
 .claude/
 PROJECT_INFO.md
+
+# Generated landmark-guide previews / mocks + local test cache (regenerated from caches)
+notebooks/*_preview.html
+notebooks/infosheet_preview_*.html
+notebooks/*_mock.html
+notebooks/_landmark_cache_test.csv

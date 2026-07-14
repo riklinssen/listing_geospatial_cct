@@ -26,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import mapping
+from shapely.geometry import mapping, Point
 from tqdm import tqdm
 
 from src.utils.config_loader import load_config, get_data_dir, get_output_dir
@@ -35,6 +35,7 @@ from src.data_processing.load_boundaries import (
     load_selected_subcells,
     validate_crs,
 )
+from src.data_processing.landmarks import category_label
 
 
 def parse_args():
@@ -96,6 +97,97 @@ def google_maps_url(lat: float, lon: float) -> str:
     return f"https://www.google.com/maps?q={lat:.6f},{lon:.6f}"
 
 
+def google_dir_url(lat: float, lon: float) -> str:
+    """Google directions link (origin = the field device's location)."""
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat:.6f},{lon:.6f}&travelmode=driving"
+
+
+def osm_dir_url(lat: float, lon: float) -> str:
+    """OpenStreetMap directions link (often better rural-track coverage than Google)."""
+    return f"https://www.openstreetmap.org/directions?to={lat:.6f}%2C{lon:.6f}&engine=fossgis_osrm_car"
+
+
+def osm_pin_url(lat: float, lon: float) -> str:
+    return f"https://www.openstreetmap.org/?mlat={lat:.6f}&mlon={lon:.6f}#map=17/{lat:.6f}/{lon:.6f}"
+
+
+def _lm_dist_label(m) -> str:
+    m = 0 if pd.isna(m) else int(m)
+    if m == 0:
+        return "in 500m cell"
+    return f"{m} m" if m < 1000 else f"{m / 1000:.2f} km"
+
+
+def landmark_section(cell_landmarks, subcells_sorted) -> str:
+    """Build the 'How to find each sub-cell' landmark block for one 5km cell.
+
+    ``cell_landmarks`` is the landmark cache rows for this 5km cell (or None).
+    Returns '' when there is no landmark data, so the sheet degrades gracefully.
+    """
+    if cell_landmarks is None or len(cell_landmarks) == 0:
+        return ""
+
+    cards = ""
+    for _, sc in subcells_sorted.iterrows():
+        gid = sc.get("grid_id", "—")
+        role = sc["selection_role"]
+        rows = cell_landmarks[cell_landmarks["grid_id"] == gid].sort_values("rank")
+        if len(rows) == 0:
+            body = ("<div class='lm-empty'>No OSM landmarks within 10 km — "
+                    "use the satellite overview and the VCSL village.</div>")
+        else:
+            # one-line summary of the nearest landmarks (distance order, NOT a route)
+            bits = []
+            for _, r in rows.head(3).iterrows():
+                where = ("inside the 500m cell" if r["dist_m"] == 0
+                         else f"{_lm_dist_label(r['dist_m'])} {r['direction']}")
+                flag = ("" if r.get("in_5km", True)
+                        else " <span class='lm-outside'>⚠ outside 5km cell</span>")
+                bits.append(f"<b>{r['name']}</b> ({category_label(r['category'])}, {where}){flag}")
+            narrative = "Look for these nearby landmarks (closest first): " + "; ".join(bits) + "."
+
+            trs = ""
+            for _, r in rows.iterrows():
+                la, lo = r["latitude"], r["longitude"]
+                attrs = (f"<a href='{r['osm_url']}' target='_blank'>attrs ↗</a>"
+                         if isinstance(r.get("osm_url"), str) and r["osm_url"] else "—")
+                inside = " class='lm-inside'" if r["dist_m"] == 0 else ""
+                flag5 = ("<span class='in5 yes'>✓</span>" if r.get("in_5km", True)
+                         else "<span class='in5 no'>⚠ outside</span>")
+                trs += (
+                    f"<tr{inside}><td>{int(r['rank'])}</td>"
+                    f"<td>{_lm_dist_label(r['dist_m'])}</td><td>{r['direction']}</td>"
+                    f"<td style='text-align:center'>{flag5}</td>"
+                    f"<td>{category_label(r['category'])}</td><td><b>{r['name']}</b></td>"
+                    f"<td>{la:.5f}, {lo:.5f}</td>"
+                    f"<td class='lm-links'><a href='{google_dir_url(la, lo)}' target='_blank'>Google ↗</a>"
+                    f"<a href='{osm_dir_url(la, lo)}' target='_blank'>OSM ↗</a></td>"
+                    f"<td class='lm-links'><a href='{google_maps_url(la, lo)}' target='_blank'>Google ↗</a>"
+                    f"<a href='{osm_pin_url(la, lo)}' target='_blank'>OSM ↗</a></td>"
+                    f"<td>{attrs}</td></tr>"
+                )
+            body = (f"<div class='lm-narrative'>{narrative}</div>"
+                    "<table class='lm-table'><thead><tr><th>#</th><th>distance</th>"
+                    "<th>dir</th><th>in 5km</th><th>type</th><th>landmark</th><th>coordinates</th>"
+                    "<th>route</th><th>pin</th><th>OSM</th></tr></thead>"
+                    f"<tbody>{trs}</tbody></table>")
+
+        centroid_html = ""
+        if pd.notna(sc.get("latitude")) and pd.notna(sc.get("longitude")):
+            cc = f"{sc['latitude']:.6f}, {sc['longitude']:.6f}"
+            centroid_html = (
+                "<div class='lm-centroid'><span class='clabel'>500m centroid</span> "
+                f"<code class='coord' title='click to select'>{cc}</code> "
+                f"<button class='copy' data-coord='{cc}' onclick='copyCoord(this)'>⧉ Copy</button> "
+                f"<a href='{google_maps_url(sc['latitude'], sc['longitude'])}' target='_blank'>Google ↗</a> "
+                f"<a href='{osm_pin_url(sc['latitude'], sc['longitude'])}' target='_blank'>OSM ↗</a></div>")
+
+        cards += (f"<div class='lm-card'><h3>Sub-cell {gid} "
+                  f"<span class='badge {role}'>{role}</span></h3>{centroid_html}{body}</div>")
+
+    return f"<h2>How to find each sub-cell — landmarks</h2>\n{cards}"
+
+
 def find_images(cell_folder: Path) -> dict:
     """Find overview and detail PNGs in the cell folder."""
     images = {"overview": None, "primary": [], "reserve": []}
@@ -131,11 +223,15 @@ def generate_html(
     subcells: gpd.GeoDataFrame,
     images: dict,
     vcsl_village: str = "—",
+    cell_landmarks=None,
 ) -> str:
     """Build the HTML content for one cell's info sheet."""
 
     # Sort: primary first
     subcells_sorted = subcells.sort_values("selection_role", ascending=True)
+
+    # 'How to find each sub-cell' landmark block (empty string if no cache)
+    landmarks_html = landmark_section(cell_landmarks, subcells_sorted)
 
     # Sub-cell table rows
     rows_html = ""
@@ -147,8 +243,11 @@ def generate_html(
         lon = sc.get("longitude", None)
 
         if lat is not None and lon is not None:
-            maps_link = f'<a href="{google_maps_url(lat, lon)}" target="_blank">Open in Google Maps</a>'
-            coords = f"{lat:.5f}, {lon:.5f}"
+            cc = f"{lat:.6f}, {lon:.6f}"   # full-precision centroid for copy-paste
+            maps_link = (f'<a href="{google_maps_url(lat, lon)}" target="_blank">Google ↗</a> · '
+                         f'<a href="{osm_pin_url(lat, lon)}" target="_blank">OSM ↗</a>')
+            coords = (f'<span class="coordchip"><code class="coord" title="click to select">{cc}</code>'
+                      f'<button class="copy" data-coord="{cc}" onclick="copyCoord(this)">⧉ Copy</button></span>')
         else:
             maps_link = "—"
             coords = "—"
@@ -369,6 +468,48 @@ def generate_html(
             background: #1d4ed8;
             text-decoration: none;
         }}
+        .lm-card {{
+            background: white;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 16px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .lm-card h3 {{ margin-top: 0; }}
+        .lm-narrative {{
+            background: #f1f5f9;
+            border-left: 3px solid #2563eb;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+        }}
+        .lm-table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; box-shadow: none; }}
+        .lm-table th {{
+            background: #eef2ff; color: #1e3a8a; font-size: 0.78em;
+            text-transform: uppercase; letter-spacing: 0.03em; padding: 8px 10px;
+        }}
+        .lm-table td {{ padding: 7px 10px; border-bottom: 1px solid #eee; }}
+        .lm-table tr.lm-inside td {{ background: #ecfdf5; }}
+        .lm-table td.lm-links {{ white-space: nowrap; }}
+        .lm-table td.lm-links a {{ margin-right: 8px; }}
+        .lm-empty {{ color: #b45309; padding: 6px 0; }}
+        .lm-outside {{ color: #b91c1c; font-weight: 700; }}
+        .in5.yes {{ color: #94a3b8; }}
+        .in5.no {{ color: #b91c1c; font-weight: 700; white-space: nowrap; }}
+        .coordchip {{ display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }}
+        .coord {{ font-family: ui-monospace, Consolas, monospace; font-weight: 700;
+            background: #eef2ff; color: #1e3a8a; padding: 2px 8px; border-radius: 5px;
+            user-select: all; -webkit-user-select: all; }}
+        .copy {{ font: inherit; font-size: 0.8em; font-weight: 600; cursor: pointer;
+            border: 1px solid #2563eb; color: #2563eb; background: white; border-radius: 6px;
+            padding: 2px 8px; }}
+        .copy:hover {{ background: #eff6ff; }}
+        .copy.ok {{ background: #16a34a; border-color: #16a34a; color: white; }}
+        .lm-centroid {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin: 8px 0 12px; padding: 8px 12px; background: #eff6ff;
+            border: 1px solid #bfdbfe; border-radius: 8px; }}
+        .lm-centroid .clabel {{ font-size: 0.72em; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.04em; color: #2563eb; }}
     </style>
 </head>
 <body>
@@ -413,11 +554,23 @@ def generate_html(
         </tbody>
     </table>
 
+    {landmarks_html}
+
     <h2>Interactive Maps</h2>
     {leaflet_maps_html}
 
     {overview_html}
     {detail_html}
+    <script>
+    function copyCoord(btn){{
+        var t=btn.dataset.coord;
+        function done(){{var o=btn.textContent;btn.textContent='copied ✓';btn.classList.add('ok');
+            setTimeout(function(){{btn.textContent=o;btn.classList.remove('ok');}},1200);}}
+        if(navigator.clipboard&&navigator.clipboard.writeText){{navigator.clipboard.writeText(t).then(done,done);}}
+        else{{var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);
+            ta.select();try{{document.execCommand('copy');}}catch(e){{}}document.body.removeChild(ta);done();}}
+    }}
+    </script>
 </body>
 </html>"""
 
@@ -445,6 +598,17 @@ def main():
         print("Error: No selected sub-cells found. Run build_data.py first.")
         sys.exit(1)
     selected = validate_crs(selected)
+
+    # Optional landmark cache (from scripts/build_landmarks.py). Absent -> the
+    # 'How to find each sub-cell' section is simply omitted.
+    lm_path = data_dir / "01_input_data" / "boundaries" / "subcell_landmarks.csv"
+    landmarks = None
+    if lm_path.exists():
+        landmarks = pd.read_csv(lm_path)
+        print(f"Loaded {len(landmarks)} landmark rows for "
+              f"{landmarks['grid_id'].nunique()} sub-cells")
+    else:
+        print(f"No landmark cache at {lm_path} — sheets will omit the landmark section.")
 
     # Exclude dropped sparse cells
     grid_5km = grid_5km[grid_5km["sample_status"] != "dropped_sparse"].copy()
@@ -498,6 +662,20 @@ def main():
         # Find existing map images
         images = find_images(cell_folder)
 
+        # Landmark rows for this 5km cell (or None if no cache), flagged for
+        # whether each landmark falls inside the 5km grid cell boundary.
+        cell_landmarks = None
+        if landmarks is not None:
+            cell_landmarks = landmarks[
+                landmarks["5km_id"].fillna(-1).astype(int) == int(grid_id)
+            ].copy()
+            geom = row.geometry  # grid_5km is validated to WGS84 in main()
+            if geom is not None and len(cell_landmarks):
+                cell_landmarks["in_5km"] = [
+                    geom.contains(Point(lo, la))
+                    for la, lo in zip(cell_landmarks["latitude"], cell_landmarks["longitude"])
+                ]
+
         html = generate_html(
             grid_id=int(grid_id),
             sample_status=sample_status,
@@ -506,6 +684,7 @@ def main():
             subcells=cell_selected,
             images=images,
             vcsl_village=vcsl_village,
+            cell_landmarks=cell_landmarks,
         )
 
         html_path = cell_folder / "info_sheet.html"
