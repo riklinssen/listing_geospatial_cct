@@ -7,6 +7,17 @@ Usage:
     python scripts/run_all.py --skip-build
 """
 
+# TODO: Fold the landmark guide into this pipeline for a reproducible end-to-end run.
+#   The three steps below are currently run by hand — add them here behind an opt-in
+#   flag (e.g. --with-landmarks), since the two Overpass builds are slow (~45-60 min
+#   each), depend on flaky public servers, and are resumable (don't block a routine
+#   maps run on an hour of Overpass; may need a 2nd pass for cells that time out):
+#     1. build_landmarks.py        -> subcell_landmarks.csv
+#     2. build_road_snaps.py       -> subcell_road_snaps.csv
+#     3. generate_landmark_dashboard.py --output <same folder as the info sheets>
+#   The dashboard auto-loads both caches; write it beside the info sheets so the
+#   overview thumbnails and "full info sheet" links resolve.
+
 import argparse
 import subprocess
 import sys
